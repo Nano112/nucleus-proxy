@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # Proxy Server Configuration  
     proxy_bind: str = "0.0.0.0:8088"
     proxy_secret: str = "change-me-in-production-default-key"
+    proxy_workers: int = Field(default=1, ge=1, le=32, description="Number of Sanic worker processes")
+    auto_reload: bool = Field(default=False, description="Enable auto reload for development")
     
     # Database and Storage
     sqlite_path: str = "./data/proxy.db"
@@ -34,7 +36,7 @@ class Settings(BaseSettings):
     cors_allow_origins: str = "*"
     
     # Timeouts and Performance
-    request_timeouts: int = 30
+    request_timeouts: int = Field(default=600, ge=30, le=3600, description="Request/response timeout in seconds")
     slow_request_threshold_ms: int = Field(default=1000, ge=100, description="Slow request threshold in milliseconds")
     
     # Monitoring / Metrics (M6)

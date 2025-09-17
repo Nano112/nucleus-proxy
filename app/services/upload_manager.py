@@ -111,7 +111,15 @@ class UploadManager:
                 error=None,
                 meta={
                     'expected_parts': num_parts,
-                    'client_info': {}
+                    'client_info': {},
+                    'phase': 'pending',
+                    'uploaded_parts': 0,
+                    'received_bytes': 0,
+                    'sync': {
+                        'status': 'pending',
+                        'uploaded_bytes': 0,
+                        'total_bytes': file_size
+                    }
                 }
             )
             
@@ -173,6 +181,16 @@ class UploadManager:
             if session.state != UploadState.PENDING:
                 return {"error": f"Upload session is in {session.state.value} state, cannot accept parts"}
             
+            session.meta = session.meta or {}
+            session.meta.setdefault('sync', {
+                'status': 'pending',
+                'uploaded_bytes': 0,
+                'total_bytes': session.size
+            })
+            session.meta.setdefault('phase', 'pending')
+            session.meta.setdefault('uploaded_parts', 0)
+            session.meta.setdefault('received_bytes', session.received_bytes)
+
             # Validate part index
             expected_parts = session.meta.get('expected_parts', 0)
             if part_index < 0 or part_index >= expected_parts:
@@ -229,17 +247,35 @@ class UploadManager:
                 # Clean up part file on database failure
                 part_file_path.unlink(missing_ok=True)
                 return {"error": "Failed to record part upload"}
-            
-            # Update session received bytes
+
+            # Update session received bytes and progress metadata
             new_received_bytes = session.received_bytes + part_size
-            await db.update_session(session.id, received_bytes=new_received_bytes)
-            
-            # Check if all parts are received
+            session.received_bytes = new_received_bytes
+
             parts = await db.get_parts(session.id)
             received_parts = len(parts)
-            
+
+            session.meta['phase'] = 'uploading'
+            session.meta['uploaded_parts'] = received_parts
+            session.meta['received_bytes'] = new_received_bytes
+            sync_meta = session.meta.setdefault('sync', {
+                'status': 'pending',
+                'uploaded_bytes': 0,
+                'total_bytes': session.size
+            })
+            sync_meta.setdefault('total_bytes', session.size)
+            if received_parts == expected_parts and new_received_bytes == session.size:
+                session.meta['phase'] = 'uploaded'
+                if sync_meta.get('status') in (None, 'pending'):
+                    sync_meta['status'] = 'pending'
+                sync_meta['uploaded_bytes'] = sync_meta.get('uploaded_bytes', 0)
+            else:
+                sync_meta.setdefault('status', 'pending')
+
+            await db.update_session(session.id, received_bytes=new_received_bytes, meta=session.meta)
+
             logger.info(f"Received part {part_index} for session {session.id}: {part_size} bytes ({received_parts}/{expected_parts} parts)")
-            
+
             result = {
                 "part_index": part_index,
                 "size": part_size,
@@ -247,16 +283,17 @@ class UploadManager:
                 "total_bytes": session.size,
                 "received_parts": received_parts,
                 "expected_parts": expected_parts,
-                "progress": new_received_bytes / session.size
+                "progress": new_received_bytes / session.size if session.size else 0,
+                "phase": session.meta.get('phase')
             }
-            
+
             # Check if ready for assembly
             if received_parts == expected_parts and new_received_bytes == session.size:
                 result["ready_for_commit"] = True
                 logger.info(f"All parts received for session {session.id}, ready for commit")
             else:
                 result["ready_for_commit"] = False
-            
+
             return result
             
         except Exception as e:
@@ -292,9 +329,21 @@ class UploadManager:
             if session.state in [UploadState.FAILED, UploadState.EXPIRED]:
                 return {"error": f"Cannot commit upload in {session.state.value} state"}
             
+            loop = asyncio.get_running_loop()
+            session.meta = session.meta or {}
+            sync_meta = session.meta.setdefault('sync', {
+                'status': 'pending',
+                'uploaded_bytes': 0,
+                'total_bytes': session.size
+            })
+            sync_meta.setdefault('total_bytes', session.size)
+            session.meta['phase'] = 'assembling'
+            if sync_meta.get('status') in (None, 'pending', 'uploading'):
+                sync_meta['status'] = 'pending'
+
             # Update state to assembling
-            await db.update_session(session.id, state=UploadState.ASSEMBLING)
-            
+            await db.update_session(session.id, state=UploadState.ASSEMBLING, meta=session.meta)
+
             try:
                 # Get all parts
                 parts = await db.get_parts(session.id)
@@ -322,21 +371,49 @@ class UploadManager:
                         return {"error": "File hash verification failed"}
                 
                 # Update state to committing
-                await db.update_session(session.id, state=UploadState.COMMITTING)
-                
+                session.meta['phase'] = 'syncing'
+                sync_meta['status'] = 'starting'
+                sync_meta['uploaded_bytes'] = 0
+                sync_meta['total_bytes'] = session.size
+                sync_meta['updated_at'] = datetime.now(timezone.utc).isoformat()
+
+                await db.update_session(session.id, state=UploadState.COMMITTING, meta=session.meta)
+
                 # Upload to Nucleus
                 nucleus_client = await ensure_authenticated()
                 target_path = f"{session.path_dir}/{session.filename}"
-                
+
                 logger.info(f"Committing assembled file to Nucleus: {target_path}")
-                
+
+                last_progress_update = 0.0
+
+                async def on_sync_progress(sent_bytes: int, total_bytes: int):
+                    nonlocal last_progress_update
+                    now = loop.time()
+                    if sent_bytes < total_bytes and (now - last_progress_update) < 1.0:
+                        return
+                    last_progress_update = now
+                    sync_meta['status'] = 'uploading'
+                    sync_meta['uploaded_bytes'] = sent_bytes
+                    sync_meta['total_bytes'] = total_bytes
+                    sync_meta['updated_at'] = datetime.now(timezone.utc).isoformat()
+                    await db.update_session(session.id, meta=session.meta)
+
                 upload_result = await nucleus_client.upload_file_single_shot(
-                    str(assembled_file_path), session.path_dir
+                    str(assembled_file_path),
+                    session.path_dir,
+                    target_filename=session.filename,
+                    progress_callback=on_sync_progress
                 )
-                
+
                 if upload_result.get('status') == 'OK' or upload_result.get('response'):
                     # Success - mark as completed
-                    await db.update_session(session.id, state=UploadState.COMPLETED)
+                    sync_meta['status'] = 'completed'
+                    sync_meta['uploaded_bytes'] = session.size
+                    sync_meta['total_bytes'] = session.size
+                    sync_meta['updated_at'] = datetime.now(timezone.utc).isoformat()
+                    session.meta['phase'] = 'completed'
+                    await db.update_session(session.id, state=UploadState.COMPLETED, meta=session.meta, error=None)
                     
                     # Index the newly uploaded file in M5 search index
                     try:
@@ -362,13 +439,29 @@ class UploadManager:
                 else:
                     # Failed - update state and return error
                     error_msg = upload_result.get('error', 'Unknown Nucleus error')
-                    await db.update_session(session.id, state=UploadState.FAILED, error=error_msg)
+                    sync_meta['status'] = 'failed'
+                    sync_meta['uploaded_bytes'] = sync_meta.get('uploaded_bytes', 0)
+                    sync_meta['total_bytes'] = session.size
+                    sync_meta['error'] = error_msg
+                    sync_meta['updated_at'] = datetime.now(timezone.utc).isoformat()
+                    session.meta['phase'] = 'failed'
+                    await db.update_session(session.id, state=UploadState.FAILED, error=error_msg, meta=session.meta)
                     
                     return {"error": f"Nucleus upload failed: {error_msg}"}
                     
             except Exception as e:
                 # Update session state on any error
-                await db.update_session(session.id, state=UploadState.FAILED, error=str(e))
+                sync_meta = session.meta.setdefault('sync', {})
+                sync_meta['status'] = 'failed'
+                sync_meta['error'] = str(e)
+                sync_meta['uploaded_bytes'] = sync_meta.get('uploaded_bytes', 0)
+                sync_meta.setdefault('total_bytes', session.size if 'session' in locals() and session else 0)
+                sync_meta['updated_at'] = datetime.now(timezone.utc).isoformat()
+                if 'session' in locals() and session:
+                    session.meta['phase'] = 'failed'
+                    await db.update_session(session.id, state=UploadState.FAILED, error=str(e), meta=session.meta)
+                else:
+                    await db.update_session(session.id, state=UploadState.FAILED, error=str(e))
                 raise
                 
         except Exception as e:
@@ -407,6 +500,7 @@ class UploadManager:
             return {
                 "session_id": session.id,
                 "state": session.state.value,
+                "phase": session.meta.get('phase'),
                 "filename": session.filename,
                 "size": session.size,
                 "received_bytes": session.received_bytes,
@@ -415,6 +509,9 @@ class UploadManager:
                 "received_parts": received_parts,
                 "expected_parts": expected_parts,
                 "missing_parts": missing_parts[:20],  # Limit to first 20 missing parts
+                "sync": session.meta.get('sync', {}),
+                "uploaded_parts": session.meta.get('uploaded_parts'),
+                "meta": session.meta,
                 "created_at": session.created_at.isoformat(),
                 "error": session.error
             }

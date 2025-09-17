@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nucleus Proxy Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-slate-950 text-slate-100 min-h-screen">
+    <div class="mx-auto max-w-6xl py-10 px-6 space-y-8">
+      <header class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 class="text-3xl font-semibold">Nucleus Proxy Control Center</h1>
+          <p class="mt-1 text-slate-400">
+            Browse your Nucleus storage, upload content, and generate signed links.
+          </p>
+        </div>
+        <div class="w-full md:w-auto">
+          <div class="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-lg shadow-indigo-500/5">
+            <div class="flex items-center justify-between gap-3">
+              <span id="authStatus" class="text-sm text-slate-300">Not signed in</span>
+              <button id="logoutButton" class="hidden rounded bg-slate-800 px-3 py-2 text-sm font-medium hover:bg-slate-700 transition-colors">
+                Sign out
+              </button>
+            </div>
+            <div id="loginWrapper" class="flex flex-col gap-2 md:flex-row">
+              <input
+                id="usernameInput"
+                type="text"
+                autocomplete="username"
+                placeholder="Username"
+                class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <input
+                id="passwordInput"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Password"
+                class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button id="loginButton" class="rounded bg-indigo-500 px-4 py-2 text-sm font-semibold transition-colors hover:bg-indigo-400">
+                Sign in
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section id="statusBanner" class="hidden rounded-lg border border-slate-800 bg-slate-900 p-4 text-sm"></section>
+
+      <section class="grid gap-8 lg:grid-cols-[320px,1fr]">
+        <aside class="space-y-6 rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-lg shadow-slate-900/40">
+          <div class="space-y-2">
+            <h2 class="text-lg font-semibold">Current path</h2>
+            <div class="flex items-center gap-2">
+              <input
+                id="pathInput"
+                type="text"
+                value="/"
+                class="flex-1 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button id="upPathButton" class="rounded bg-slate-800 px-3 py-2 text-sm font-medium hover:bg-slate-700 transition-colors" title="Go up one level">
+                Up
+              </button>
+              <button id="goPathButton" class="rounded bg-slate-800 px-3 py-2 text-sm font-medium hover:bg-slate-700 transition-colors">
+                Go
+              </button>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <h2 class="text-lg font-semibold">New folder</h2>
+            <div class="flex items-center gap-2">
+              <input
+                id="folderNameInput"
+                type="text"
+                placeholder="Folder name"
+                class="flex-1 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button id="createFolderButton" class="rounded bg-emerald-500 px-3 py-2 text-sm font-medium text-emerald-950 hover:bg-emerald-400 transition-colors">
+                Create
+              </button>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <h2 class="text-lg font-semibold">Signed URLs</h2>
+            <div class="grid gap-2">
+              <button id="generateUploadUrlButton" class="rounded bg-blue-500 px-3 py-2 text-sm font-medium text-blue-950 hover:bg-blue-400 transition-colors">
+                Generate upload URL
+              </button>
+              <button id="generateDownloadUrlButton" class="rounded bg-purple-500 px-3 py-2 text-sm font-medium text-purple-950 hover:bg-purple-400 transition-colors">
+                Generate download URL
+              </button>
+            </div>
+            <textarea
+              id="signedUrlOutput"
+              rows="4"
+              class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200"
+              placeholder="Signed URL response will appear here..."
+            ></textarea>
+          </div>
+        </aside>
+
+        <main class="space-y-6">
+          <section class="overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-lg shadow-slate-900/40">
+            <div class="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+              <div>
+                <h2 class="text-lg font-semibold">File explorer</h2>
+                <p class="text-xs text-slate-400">Double-click a folder to navigate inside.</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button id="refreshButton" class="rounded bg-slate-800 px-3 py-2 text-sm font-medium hover:bg-slate-700 transition-colors">
+                  Refresh
+                </button>
+                <button id="deleteButton" class="rounded bg-rose-600 px-3 py-2 text-sm font-medium text-rose-50 transition-colors hover:bg-rose-500 disabled:opacity-60 disabled:cursor-not-allowed" title="Delete selected file or folder">
+                  Delete selected
+                </button>
+              </div>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="min-w-full divide-y divide-slate-800">
+                <thead class="bg-slate-950/60 text-xs uppercase tracking-wider text-slate-400">
+                  <tr>
+                    <th class="px-6 py-3 text-left">Name</th>
+                    <th class="px-6 py-3 text-left">Type</th>
+                    <th class="px-6 py-3 text-left">Size</th>
+                    <th class="px-6 py-3 text-left">Modified</th>
+                    <th class="px-6 py-3 text-left">Created by</th>
+                  </tr>
+                </thead>
+                <tbody id="fileTableBody" class="divide-y divide-slate-800"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section
+            id="dropzone"
+            class="rounded-xl border-2 border-dashed border-slate-700 bg-slate-900 px-6 py-12 text-center transition-colors"
+          >
+            <div class="space-y-2">
+              <p class="text-lg font-semibold">Drop files here to upload</p>
+              <p class="text-sm text-slate-400">or click to browse from your computer</p>
+              <p id="uploadProgressText" class="text-sm text-indigo-400"></p>
+              <p id="uploadSecondaryText" class="text-xs text-slate-400"></p>
+              <div id="uploadProgressBar" class="h-2 w-full overflow-hidden rounded-full bg-slate-800/80 transition-all duration-200 ease-out hidden">
+                <div id="uploadProgressFill" class="h-full w-0 bg-indigo-500 transition-all duration-200 ease-out"></div>
+              </div>
+            </div>
+            <input id="fileInput" type="file" class="hidden" multiple />
+          </section>
+        </main>
+      </section>
+    </div>
+
+    <script src="/static/js/nucleus-proxy-client.js"></script>
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        const client = new NucleusProxyClient({ baseUrl: '' });
+
+        const loginWrapper = document.getElementById('loginWrapper');
+        const loginButton = document.getElementById('loginButton');
+        const logoutButton = document.getElementById('logoutButton');
+        const usernameInput = document.getElementById('usernameInput');
+        const passwordInput = document.getElementById('passwordInput');
+        const authStatus = document.getElementById('authStatus');
+
+        const statusBanner = document.getElementById('statusBanner');
+        const pathInput = document.getElementById('pathInput');
+        const goPathButton = document.getElementById('goPathButton');
+        const upPathButton = document.getElementById('upPathButton');
+        const refreshButton = document.getElementById('refreshButton');
+        const deleteButton = document.getElementById('deleteButton');
+        const folderNameInput = document.getElementById('folderNameInput');
+        const createFolderButton = document.getElementById('createFolderButton');
+        const generateUploadUrlButton = document.getElementById('generateUploadUrlButton');
+        const generateDownloadUrlButton = document.getElementById('generateDownloadUrlButton');
+        const signedUrlOutput = document.getElementById('signedUrlOutput');
+        const fileTableBody = document.getElementById('fileTableBody');
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        const progressText = document.getElementById('uploadProgressText');
+        const progressSecondaryText = document.getElementById('uploadSecondaryText');
+        const progressBar = document.getElementById('uploadProgressBar');
+        const progressBarFill = document.getElementById('uploadProgressFill');
+
+        let currentPath = '/';
+        let progressResetTimeout = null;
+        let selectedEntry = null;
+        let currentUser = null;
+        let bannerTimeout = null;
+
+        function isDirectoryEntry(entry) {
+          const type = (entry?.type || '').toLowerCase();
+          return type === 'directory' || type === 'folder' || type === 'mount';
+        }
+
+        const controls = [
+          pathInput,
+          goPathButton,
+          upPathButton,
+          refreshButton,
+          deleteButton,
+          folderNameInput,
+          createFolderButton,
+          generateUploadUrlButton,
+          generateDownloadUrlButton,
+        ];
+
+        function updateSelectionControls() {
+          if (deleteButton) {
+            deleteButton.disabled = !selectedEntry;
+          }
+        }
+
+        updateSelectionControls();
+
+        function showBanner(message, type = 'info') {
+          if (bannerTimeout) {
+            clearTimeout(bannerTimeout);
+          }
+
+          const styles = {
+            success: 'border-emerald-500/40 bg-emerald-900/40 text-emerald-100',
+            error: 'border-rose-500/40 bg-rose-900/40 text-rose-100',
+            info: 'border-slate-800 bg-slate-900 text-slate-200',
+          };
+
+          statusBanner.textContent = message;
+          statusBanner.className = `rounded-lg border px-4 py-3 text-sm ${styles[type] || styles.info}`;
+          statusBanner.classList.remove('hidden');
+
+          bannerTimeout = setTimeout(() => {
+            statusBanner.classList.add('hidden');
+          }, 5000);
+        }
+
+        function clearFileTable(message) {
+          selectedEntry = null;
+          updateSelectionControls();
+          fileTableBody.innerHTML = `
+            <tr>
+              <td colspan="5" class="px-6 py-6 text-center text-sm text-slate-400">${message}</td>
+            </tr>
+          `;
+        }
+
+        function toggleControls(enabled) {
+          controls.forEach((element) => {
+            element.disabled = !enabled;
+            element.classList.toggle('opacity-60', !enabled);
+            element.classList.toggle('cursor-not-allowed', !enabled && element.tagName === 'BUTTON');
+          });
+          fileInput.disabled = !enabled;
+          dropzone.classList.toggle('pointer-events-none', !enabled);
+          dropzone.classList.toggle('opacity-60', !enabled);
+          if (enabled) {
+            updateSelectionControls();
+          } else if (deleteButton) {
+            deleteButton.disabled = true;
+          }
+        }
+
+        function setAuthenticated(token, username) {
+          if (token) {
+            client.setToken(token);
+            currentUser = username || currentUser;
+            localStorage.setItem('nucleusProxyToken', token);
+            if (currentUser) {
+              localStorage.setItem('nucleusProxyUser', currentUser);
+            }
+            authStatus.textContent = `Signed in${currentUser ? ` as ${currentUser}` : ''}`;
+            loginWrapper.classList.add('hidden');
+            logoutButton.classList.remove('hidden');
+            toggleControls(true);
+            selectedEntry = null;
+            updateSelectionControls();
+          } else {
+            client.setToken(null);
+            currentUser = null;
+            localStorage.removeItem('nucleusProxyToken');
+            localStorage.removeItem('nucleusProxyUser');
+            authStatus.textContent = 'Not signed in';
+            loginWrapper.classList.remove('hidden');
+            logoutButton.classList.add('hidden');
+            toggleControls(false);
+            selectedEntry = null;
+            updateSelectionControls();
+            currentPath = '/';
+            pathInput.value = '/';
+            clearFileTable('Sign in to browse files.');
+          }
+        }
+
+        function handleAuthFailure(message) {
+          setAuthenticated(null);
+          showBanner(message || 'Please sign in to continue.', 'error');
+        }
+
+        function ensureAuthenticated() {
+          if (!client.isAuthenticated()) {
+            handleAuthFailure();
+            return false;
+          }
+          return true;
+        }
+
+        async function refreshDirectory(path) {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          try {
+            const result = await client.listFiles({ path });
+            if (result.error) {
+              if (result.status === 401) {
+                handleAuthFailure('Session expired. Please sign in again.');
+                return;
+              }
+              throw new Error(result.error.message || 'Failed to list files');
+            }
+
+            const entries = result.data.entries || [];
+            renderFileRows(entries);
+            currentPath = path;
+            pathInput.value = path;
+          } catch (err) {
+            showBanner(err.message, 'error');
+          }
+        }
+
+        function renderFileRows(entries) {
+          selectedEntry = null;
+          updateSelectionControls();
+          if (!entries.length) {
+            clearFileTable('Folder is empty.');
+            return;
+          }
+
+          fileTableBody.innerHTML = '';
+          const sorted = [...entries].sort((a, b) => {
+            const aDir = isDirectoryEntry(a);
+            const bDir = isDirectoryEntry(b);
+            if (aDir === bDir) {
+              return (a.name || '').localeCompare(b.name || '');
+            }
+            return aDir ? -1 : 1;
+          });
+
+          sorted.forEach((entry) => {
+            const row = document.createElement('tr');
+            row.className = 'group cursor-pointer hover:bg-slate-800/40';
+
+            const entryPath = normalizePath(entry.path || `${currentPath.replace(/\/$/, '')}/${entry.name}`);
+            row.dataset.path = entryPath;
+
+            const isDir = isDirectoryEntry(entry);
+            const displayName = entry.name || (entryPath === '/' ? '(root)' : entryPath);
+
+            row.innerHTML = `
+              <td class="px-6 py-3">
+                <div class="flex items-center gap-2">
+                  <span class="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-xs text-slate-300 transition-colors group-hover:bg-indigo-600 group-hover:text-indigo-50">
+                    ${isDir ? '📁' : '📄'}
+                  </span>
+                  <span>${displayName}${isDir ? ' /' : ''}</span>
+                </div>
+              </td>
+              <td class="px-6 py-3 text-sm text-slate-400">${entry.type ?? 'file'}</td>
+              <td class="px-6 py-3 text-sm text-slate-400">${entry.size ?? ''}</td>
+              <td class="px-6 py-3 text-sm text-slate-400">${entry.modified_at ? new Date(entry.modified_at).toLocaleString() : ''}</td>
+              <td class="px-6 py-3 text-sm text-slate-400">${entry.created_by ?? ''}</td>
+            `;
+
+            row.addEventListener('dblclick', () => {
+              if (isDir) {
+                refreshDirectory(entryPath);
+              }
+            });
+
+            row.addEventListener('click', () => {
+              document.querySelectorAll('#fileTableBody tr').forEach((otherRow) => {
+                otherRow.classList.remove('bg-slate-800/60');
+              });
+              row.classList.add('bg-slate-800/60');
+              selectedEntry = {
+                path: entryPath,
+                isDirectory: isDir,
+                name: displayName,
+                raw: entry,
+              };
+              updateSelectionControls();
+            });
+
+            fileTableBody.appendChild(row);
+          });
+        }
+
+
+        function normalizePath(path) {
+          if (!path) {
+            return '/';
+          }
+          let normalized = path.replace(/\\+/g, '/');
+          if (!normalized.startsWith('/')) {
+            normalized = `/${normalized}`;
+          }
+          if (normalized.length > 1) {
+            normalized = normalized.replace(/\/+$/, '');
+          }
+          return normalized || '/';
+        }
+
+        function getParentPath(path) {
+          const normalized = normalizePath(path);
+          if (normalized === '/') {
+            return '/';
+          }
+          const parent = normalized.substring(0, normalized.lastIndexOf('/')) || '/';
+          return parent;
+        }
+
+        function formatBytes(bytes) {
+          if (!Number.isFinite(bytes) || bytes < 0) {
+            return '';
+          }
+          const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+          let value = bytes;
+          let unitIndex = 0;
+          while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex += 1;
+          }
+          const decimals = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+          return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+        }
+
+        function formatDuration(seconds) {
+          if (!Number.isFinite(seconds) || seconds <= 0) {
+            return '0s';
+          }
+          const rounded = Math.round(seconds);
+          const hours = Math.floor(rounded / 3600);
+          const minutes = Math.floor((rounded % 3600) / 60);
+          const secs = Math.max(1, rounded % 60);
+          const parts = [];
+          if (hours) {
+            parts.push(`${hours}h`);
+          }
+          if (hours || minutes) {
+            parts.push(`${minutes}m`);
+          }
+          parts.push(`${secs}s`);
+          return parts.join(' ');
+        }
+
+        function formatEta(seconds) {
+          if (!Number.isFinite(seconds) || seconds <= 0) {
+            return 'estimating...';
+          }
+          return formatDuration(seconds);
+        }
+
+        function formatSpeed(bytesPerSecond) {
+          if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+            return '--';
+          }
+          if (bytesPerSecond >= 1024 * 1024) {
+            return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
+          }
+          return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+        }
+
+        loginButton.addEventListener('click', async () => {
+          if (loginButton.disabled) {
+            return;
+          }
+          const username = usernameInput.value.trim();
+          const password = passwordInput.value.trim();
+          if (!username || !password) {
+            showBanner('Enter your username and password.', 'error');
+            return;
+          }
+
+          loginButton.disabled = true;
+          loginButton.classList.add('opacity-60');
+          try {
+            const result = await client.login({ username, password });
+            if (result.error) {
+              throw new Error(result.error.message || 'Login failed');
+            }
+            const token = result.data.access_token;
+            setAuthenticated(token, username);
+            passwordInput.value = '';
+            showBanner('Authentication successful.', 'success');
+            refreshDirectory('/');
+          } catch (err) {
+            handleAuthFailure(err.message);
+          } finally {
+            loginButton.disabled = false;
+            loginButton.classList.remove('opacity-60');
+          }
+        });
+
+        logoutButton.addEventListener('click', async () => {
+          if (!client.isAuthenticated()) {
+            handleAuthFailure();
+            return;
+          }
+          try {
+            await client.logout();
+          } catch (err) {
+            console.warn('Logout request failed', err);
+          } finally {
+            setAuthenticated(null);
+            showBanner('Signed out.', 'info');
+          }
+        });
+
+        goPathButton.addEventListener('click', () => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          const target = normalizePath(pathInput.value.trim() || '/');
+          refreshDirectory(target);
+        });
+
+        upPathButton.addEventListener('click', () => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          const parentPath = getParentPath(currentPath);
+          refreshDirectory(parentPath);
+        });
+
+        refreshButton.addEventListener('click', () => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          refreshDirectory(currentPath);
+        });
+
+
+        deleteButton.addEventListener('click', async () => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          if (!selectedEntry) {
+            showBanner('Select a file or folder to delete.', 'error');
+            return;
+          }
+
+          const target = { ...selectedEntry };
+          const itemLabel = target.name || target.path || 'item';
+          const confirmMessage = target.isDirectory
+            ? `Delete folder ${itemLabel}?`
+            : `Delete file ${itemLabel}?`;
+          if (!window.confirm(confirmMessage)) {
+            return;
+          }
+
+          deleteButton.disabled = true;
+          try {
+            const result = await client.deleteFile({ path: target.path });
+            if (result.error) {
+              const payload = result.error;
+              const message = (payload && (payload.message || payload.error)) || 'Failed to delete item';
+              throw new Error(message);
+            }
+            showBanner(`${itemLabel} deleted.`, 'success');
+            selectedEntry = null;
+            updateSelectionControls();
+            await refreshDirectory(currentPath);
+          } catch (err) {
+            showBanner(err.message || `Failed to delete ${itemLabel}`, 'error');
+            if (selectedEntry) {
+              deleteButton.disabled = false;
+            } else {
+              updateSelectionControls();
+            }
+          }
+        });
+
+        pathInput.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            goPathButton.click();
+          }
+        });
+
+        createFolderButton.addEventListener('click', async () => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          const name = folderNameInput.value.trim();
+          if (!name) {
+            showBanner('Folder name is required.', 'error');
+            return;
+          }
+
+          const base = currentPath === '/' ? '' : currentPath;
+          const targetPath = normalizePath(`${base}/${name}`);
+
+          try {
+            const result = await client.createDirectory({ path: targetPath });
+            if (result.error) {
+              throw new Error(result.error.message || 'Failed to create folder');
+            }
+            folderNameInput.value = '';
+            showBanner('Folder created successfully.', 'success');
+            refreshDirectory(currentPath);
+          } catch (err) {
+            if (err.status === 401) {
+              handleAuthFailure('Session expired. Please sign in again.');
+              return;
+            }
+            showBanner(err.message, 'error');
+          }
+        });
+
+
+
+        async function handleFiles(fileList) {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+
+          const files = Array.from(fileList || []);
+          if (!files.length) {
+            return;
+          }
+
+          toggleControls(false);
+          if (progressResetTimeout) {
+            clearTimeout(progressResetTimeout);
+            progressResetTimeout = null;
+          }
+
+          try {
+            for (const file of files) {
+              progressBar.classList.remove('hidden');
+              progressBarFill.style.width = '0%';
+              progressText.textContent = `Preparing ${file.name}...`;
+              progressSecondaryText.textContent = '';
+
+              let lastSyncMeta = null;
+
+              const updateProgress = (progress) => {
+                if (!progress) {
+                  return;
+                }
+                if (progress.status && progress.status.error) {
+                  const errorInfo = progress.status.error;
+                  const errorText = typeof errorInfo === 'string' ? errorInfo : (errorInfo.message || JSON.stringify(errorInfo));
+                  progressText.textContent = `Sync error: ${errorText}`;
+                  progressSecondaryText.textContent = '';
+                }
+                const phase = progress.phase || 'uploading';
+                const totalBytes = Number.isFinite(progress.totalBytes) ? progress.totalBytes : file.size;
+                const uploadedProxyBytes = Number.isFinite(progress.loadedBytes) ? progress.loadedBytes : 0;
+                const syncMeta = progress.syncMeta || lastSyncMeta || {};
+
+                if (progress.syncMeta) {
+                  lastSyncMeta = progress.syncMeta;
+                }
+
+                const syncUploadedBytes = Number.isFinite(syncMeta.uploaded_bytes) ? syncMeta.uploaded_bytes : 0;
+                const syncTotalBytes = Number.isFinite(syncMeta.total_bytes) && syncMeta.total_bytes > 0
+                  ? syncMeta.total_bytes
+                  : totalBytes;
+
+                const combinedTotal = totalBytes + syncTotalBytes;
+                const combinedLoaded = Math.min(combinedTotal, uploadedProxyBytes + syncUploadedBytes);
+                const overallPercent = combinedTotal
+                  ? Math.min(100, Math.max(0, (combinedLoaded / combinedTotal) * 100))
+                  : 0;
+
+                progressBarFill.style.width = `${overallPercent}%`;
+
+                if (phase === 'uploading') {
+                  const proxyPercent = totalBytes
+                    ? Math.min(100, Math.max(0, (uploadedProxyBytes / totalBytes) * 100))
+                    : 0;
+                  const etaText = formatEta(progress.etaSeconds);
+                  const speedText = formatSpeed(progress.speedBytesPerSecond);
+                  progressText.textContent = `Uploading ${file.name}: ${proxyPercent.toFixed(1)}%`;
+                  progressSecondaryText.textContent = `ETA ${etaText}${speedText !== '--' ? ` | ${speedText}` : ''}`;
+                } else if (phase === 'assembling') {
+                  progressText.textContent = `Preparing ${file.name} for sync...`;
+                  progressSecondaryText.textContent = '';
+                } else if (phase === 'syncing') {
+                  const syncState = progress.syncState || (progress.status && progress.status.state) || 'committing';
+                  const syncPercent = syncTotalBytes
+                    ? Math.min(100, Math.max(0, (syncUploadedBytes / syncTotalBytes) * 100))
+                    : 0;
+                  let stateLabel = 'Syncing to Nucleus';
+                  if (syncState === 'completed') {
+                    stateLabel = 'Sync complete';
+                  } else if (syncState === 'failed') {
+                    stateLabel = 'Sync failed';
+                  } else if (syncState === 'assembling') {
+                    stateLabel = 'Preparing sync';
+                  }
+                  progressText.textContent = `${stateLabel}: ${syncPercent.toFixed(1)}%`;
+                  progressSecondaryText.textContent = `Proxy upload 100% | Sync progress ${syncPercent.toFixed(1)}%`;
+                } else if (phase === 'complete') {
+                  const duration = formatDuration(progress.elapsedSeconds);
+                  const sizeText = formatBytes(file.size);
+                  progressBarFill.style.width = '100%';
+                  progressText.textContent = `${file.name} uploaded${sizeText ? ` (${sizeText})` : ''} in ${duration}.`;
+                  progressSecondaryText.textContent = 'Synced to Nucleus successfully.';
+                }
+              };
+
+              try {
+                await client.uploadFile({
+                  file,
+                  path: currentPath,
+                  onProgress: updateProgress,
+                });
+                showBanner(`${file.name} uploaded successfully.`, 'success');
+                await refreshDirectory(currentPath);
+              } catch (err) {
+                progressSecondaryText.textContent = '';
+                showBanner(err.message || `Failed to upload ${file.name}`, 'error');
+                break;
+              } finally {
+                if (progressResetTimeout) {
+                  clearTimeout(progressResetTimeout);
+                }
+                progressResetTimeout = setTimeout(() => {
+                  progressBarFill.style.width = '0%';
+                  progressBar.classList.add('hidden');
+                  progressText.textContent = '';
+                  progressSecondaryText.textContent = '';
+                  progressResetTimeout = null;
+                }, 1800);
+              }
+            }
+          } finally {
+            toggleControls(true);
+          }
+        }
+        dropzone.addEventListener('click', () => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (event) => {
+          if (event.target.files?.length) {
+            handleFiles(event.target.files)
+              .catch((err) => console.error('Upload failed', err))
+              .finally(() => {
+                fileInput.value = '';
+              });
+          }
+        });
+
+        ['dragenter', 'dragover'].forEach((eventName) => {
+          dropzone.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!client.isAuthenticated()) {
+              return;
+            }
+            dropzone.classList.add('border-indigo-500', 'bg-slate-900/70');
+          });
+        });
+
+        ['dragleave', 'drop'].forEach((eventName) => {
+          dropzone.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropzone.classList.remove('border-indigo-500', 'bg-slate-900/70');
+          });
+        });
+
+        dropzone.addEventListener('drop', (event) => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          const files = event.dataTransfer?.files;
+          if (files?.length) {
+            handleFiles(files).catch((err) => console.error('Upload failed', err));
+          }
+        });
+
+        generateUploadUrlButton.addEventListener('click', async () => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          try {
+            const body = {
+              filename: 'upload.bin',
+              file_size: 1024,
+              path_dir: currentPath,
+            };
+            const result = await client.generateSignedUpload(body);
+            if (result.error) {
+              if (result.status === 401) {
+                handleAuthFailure('Session expired. Please sign in again.');
+                return;
+              }
+              throw new Error(result.error.message || 'Failed to create upload URL');
+            }
+            signedUrlOutput.value = JSON.stringify(result.data, null, 2);
+            showBanner('Upload URL generated.', 'success');
+          } catch (err) {
+            showBanner(err.message, 'error');
+          }
+        });
+
+        generateDownloadUrlButton.addEventListener('click', async () => {
+          if (!ensureAuthenticated()) {
+            return;
+          }
+          try {
+            const result = await client.generateSignedDownload({ file_path: currentPath });
+            if (result.error) {
+              if (result.status === 401) {
+                handleAuthFailure('Session expired. Please sign in again.');
+                return;
+              }
+              throw new Error(result.error.message || 'Failed to create download URL');
+            }
+            signedUrlOutput.value = JSON.stringify(result.data, null, 2);
+            showBanner('Download URL generated.', 'success');
+          } catch (err) {
+            showBanner(err.message, 'error');
+          }
+        });
+
+        // Restore session if possible
+        const savedToken = localStorage.getItem('nucleusProxyToken');
+        const savedUser = localStorage.getItem('nucleusProxyUser');
+        if (savedToken) {
+          setAuthenticated(savedToken, savedUser || null);
+          refreshDirectory('/');
+        } else {
+          setAuthenticated(null);
+        }
+      });
+    </script>
+  </body>
+</html>

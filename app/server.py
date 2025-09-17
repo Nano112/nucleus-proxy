@@ -6,6 +6,7 @@ with multi-tenancy, security, and real-time event capabilities.
 """
 
 import logging
+from pathlib import Path
 from sanic import Sanic, Request, HTTPResponse
 from sanic.response import json as sanic_json
 # from sanic_ext import Extend  # Auto-loaded by Sanic
@@ -17,6 +18,7 @@ from app.routes.signed_urls import signed_urls_bp
 from app.routes.monitoring import monitoring_bp
 from app.routes.tenants import tenants_bp
 from app.routes.realtime import realtime_bp
+from app.routes.ui import ui_bp, ui_api_bp
 from app.middleware.monitoring import setup_monitoring_middleware
 from app.middleware.security import security_middleware
 
@@ -27,7 +29,13 @@ def create_app() -> Sanic:
     # Create app instance that will be registered in the app registry
     app = Sanic("nucleus-proxy")
 
-    app.static("/favicon.ico", "./static/favicon.ico")
+    timeout_seconds = max(1, int(settings.request_timeouts))
+    app.config.REQUEST_TIMEOUT = timeout_seconds
+    app.config.RESPONSE_TIMEOUT = timeout_seconds
+    app.config.KEEP_ALIVE_TIMEOUT = max(5, min(timeout_seconds // 2, 120))
+
+    static_dir = Path(__file__).resolve().parent / "static"
+    app.static("/static", str(static_dir))
     
     # Configure Sanic-Ext for OpenAPI
     # OpenAPI/Swagger metadata
@@ -44,6 +52,7 @@ def create_app() -> Sanic:
     
     # Configure logging
     logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
+    logging.getLogger('aiosqlite').setLevel(logging.WARNING)
     
     # Register blueprints
     app.blueprint(auth_bp)
@@ -53,6 +62,8 @@ def create_app() -> Sanic:
     app.blueprint(monitoring_bp)
     app.blueprint(tenants_bp)
     app.blueprint(realtime_bp)
+    app.blueprint(ui_bp)
+    app.blueprint(ui_api_bp)
     
     # Setup monitoring middleware
     setup_monitoring_middleware(app)
@@ -60,27 +71,6 @@ def create_app() -> Sanic:
     # Setup security hardening middleware
     security_middleware(app)
 
-    # Compatibility: ensure diagnostics endpoint is publicly accessible in test envs
-    @app.middleware('request')
-    async def diagnostics_public_middleware(request: Request):
-        if request.path == '/v1/monitoring/diagnostics':
-            try:
-                import os, sys
-                from app.services.metrics import get_metrics_collector
-                collector = get_metrics_collector()
-                system = collector.get_system_metrics()
-                return sanic_json({
-                    'python_version': sys.version,
-                    'platform': sys.platform,
-                    'process_id': os.getpid(),
-                    'system': system.get('system', {}),
-                    'process': system.get('process', {}),
-                    'timestamp': system.get('timestamp')
-                })
-            except Exception:
-                # Fall through to normal handling on error
-                return None
-    
     # Add startup tasks
     @app.before_server_start
     async def setup_database(app_instance, loop):
@@ -158,24 +148,5 @@ def create_app() -> Sanic:
 app = create_app()
 
 
-def main():
-    """Entry point for running the server."""
-    # Parse bind address
-    bind_parts = settings.proxy_bind.split(":")
-    host = bind_parts[0]
-    port = int(bind_parts[1]) if len(bind_parts) > 1 else 8088
-    
-    # Run server - use single process in development to avoid app loader issues
-    is_debug = (settings.log_level.upper() == "DEBUG")
-    app.run(
-        host=host,
-        port=port,
-        debug=is_debug,
-        # Use either auto_reload OR single_process, not both
-        auto_reload=False if is_debug else False,  # Disable auto-reload to use single_process
-        single_process=True  # Prevents the app loader issue
-    )
-
-
-if __name__ == "__main__":
-    main()
+# The main() function is now in run.py
+# The app instance is created at module level above for proper multiprocess support

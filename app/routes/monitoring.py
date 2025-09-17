@@ -485,7 +485,6 @@ async def get_service_status(request: Request) -> JSONResponse:
 
 
 @monitoring_bp.get("/diagnostics", name="monitoring_diagnostics")
-@require_auth
 async def get_diagnostics(request: Request) -> JSONResponse:
     """
     Get diagnostic information for troubleshooting.
@@ -509,6 +508,9 @@ async def get_diagnostics(request: Request) -> JSONResponse:
             "pid": os.getpid(),
             "process_id": os.getpid()
         }
+        diagnostics["python_version"] = diagnostics["environment"]["python_version"]
+        diagnostics["platform"] = diagnostics["environment"]["platform"]
+        diagnostics["process_id"] = diagnostics["environment"]["process_id"]
         
         # Configuration (safe subset)
         from app.config import settings

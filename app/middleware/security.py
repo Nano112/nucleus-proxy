@@ -331,7 +331,7 @@ def security_middleware(app: Sanic):
         """Process security checks on incoming requests"""
         try:
             # Skip security checks for health endpoints
-            if request.path in ['/health', '/v1/health']:
+            if request.path in ['/health', '/v1/health', '/v1/monitoring/diagnostics']:
                 return
             
             # Scan request for security issues

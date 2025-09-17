@@ -10,7 +10,7 @@ import json
 import base64
 import aiohttp
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable, Awaitable
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -127,28 +127,50 @@ class NucleusClient:
             logger.debug(f"Sending JSON via persistent API: {message}")
             await self.api_websocket.send(message)
             
+
             if streaming:
-                # Handle streaming responses like list2
-                all_entries = []
-                while True:
-                    response_data = await asyncio.wait_for(self.api_websocket.recv(), timeout=15)
-                    response = self.decode_response(response_data)
-                    
-                    # Check for error statuses first
-                    status = response.get("status")
-                    if status and status not in ["OK", "DONE", "LATEST"]:
-                        # Any non-success status should be returned immediately
-                        return response
-                    
-                    # Accumulate entries if present
-                    if response.get("entries"):
-                        all_entries.extend(response["entries"])
-                    
-                    # Check for success/completion statuses
-                    if status in ["DONE", "LATEST", "OK"]:
-                        return {"status": status, "entries": all_entries}
-                
-                return {"entries": all_entries}
+                all_entries: List[Dict[str, Any]] = []
+                status: Optional[str] = None
+                try:
+                    if not self.api_websocket:
+                        if not await self.authorize_api_connection():
+                            return {"error": "Failed to authorize API connection"}
+
+                    while True:
+                        response_data = await asyncio.wait_for(self.api_websocket.recv(), timeout=15)
+                        response = self.decode_response(response_data)
+
+                        status = response.get("status")
+
+                        # Handle error statuses immediately
+                        if status and status not in {"OK", "DONE", "LATEST"}:
+                            return response
+
+                        # Accumulate entries if present
+                        if response.get("entries"):
+                            all_entries.extend(response["entries"])
+
+                        # Treat OK/DONE/LATEST as completion states
+                        if status in {"OK", "DONE", "LATEST"}:
+                            if all_entries and not response.get("entries"):
+                                response = {**response, "entries": all_entries}
+                            elif all_entries and response.get("entries") is not all_entries:
+                                response = {**response, "entries": all_entries}
+                            return response
+
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout waiting for streaming response")
+                    if all_entries:
+                        return {"status": status or "OK", "entries": all_entries}
+                    return {"status": status or "TIMEOUT"}
+                except Exception as e:
+                    logger.error(f"Streaming API method failed: {e}")
+                    return {"error": str(e)}
+
+                if all_entries:
+                    return {"status": status or "OK", "entries": all_entries}
+                return {"status": status or "UNKNOWN"}
+
             else:
                 # Single response
                 response_data = await asyncio.wait_for(self.api_websocket.recv(), timeout=15)
@@ -408,7 +430,13 @@ class NucleusClient:
             return {"error": f"Failed to get download URL: {e}"}
     
     # HTTP-based Large File Transfer (port 3030)
-    async def upload_file_single_shot(self, local_file_path: str, remote_path: str, target_filename: Optional[str] = None) -> Dict[str, Any]:
+    async def upload_file_single_shot(
+        self,
+        local_file_path: str,
+        remote_path: str,
+        target_filename: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int], Optional[Awaitable[None]]]] = None,
+    ) -> Dict[str, Any]:
         """Upload file using HTTP LFT service (single-shot).
         
         Args:
@@ -434,50 +462,77 @@ class NucleusClient:
         encoded_path = base64.b64encode(remote_path.encode()).decode()
         url = f"http://{self.host}:3030/path/bulk/"
         
+
         params = {
             'path': encoded_path,
             'token': self.auth_token,
             'message': 'Uploaded via Nucleus Proxy'
         }
-        
-        # Create multipart form data
-        data = aiohttp.FormData()
-        data.add_field('size', str(file_size))
-        data.add_field('path', filename)
-        
-        try:
+
+        async def maybe_report(callback, sent_bytes, total_bytes):
+            if not callback:
+                return
+            result = callback(sent_bytes, total_bytes)
+            if asyncio.iscoroutine(result):
+                await result
+
+        await maybe_report(progress_callback, 0, file_size)
+
+        chunk_size = max(1024 * 1024, min(8 * 1024 * 1024, max(file_size // 64, 1024 * 1024)))
+
+        async def file_stream():
+            sent = 0
+            loop = asyncio.get_running_loop()
             with open(local_file_path, 'rb') as file_handle:
-                data.add_field('data', file_handle, filename=filename, content_type='application/octet-stream')
-                
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, params=params, data=data) as response:
-                        if response.status in (200, 201, 204):
-                            # Server may return various content types
-                            raw_body = await response.read()
-                            body_text = raw_body.decode('utf-8', errors='ignore') if raw_body else ''
-                            
-                            # Try to parse JSON, fallback to success status
-                            try:
-                                result = json.loads(body_text) if body_text else {}
-                            except json.JSONDecodeError:
-                                result = {"response": body_text or f"{len(raw_body)} bytes"}
-                            
-                            if isinstance(result, dict) and "status" not in result:
-                                result["status"] = "OK"
-                            
-                            logger.info(f"✓ Upload successful: {filename} -> {remote_path}")
-                            return result
-                        else:
-                            content_type = response.headers.get('Content-Type', '')
-                            text = await response.text()
-                            error_msg = f"Upload failed: {response.status} ({content_type}) - {text}"
-                            logger.error(f"✗ {error_msg}")
-                            return {"error": error_msg}
-                            
+                while True:
+                    chunk = await loop.run_in_executor(None, file_handle.read, chunk_size)
+                    if not chunk:
+                        break
+                    sent += len(chunk)
+                    yield chunk
+                    await maybe_report(progress_callback, min(sent, file_size), file_size)
+
+        writer = aiohttp.MultipartWriter()
+        size_part = writer.append(str(file_size))
+        size_part.set_content_disposition('form-data', name='size')
+        path_part = writer.append(filename)
+        path_part.set_content_disposition('form-data', name='path')
+        file_part = writer.append(file_stream(), headers={'Content-Type': 'application/octet-stream'})
+        file_part.set_content_disposition('form-data', name='data', filename=filename)
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=None)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, params=params, data=writer) as response:
+                    if response.status in (200, 201, 204):
+                        # Server may return various content types
+                        raw_body = await response.read()
+                        body_text = raw_body.decode('utf-8', errors='ignore') if raw_body else ''
+
+                        # Try to parse JSON, fallback to success status
+                        try:
+                            result = json.loads(body_text) if body_text else {}
+                        except json.JSONDecodeError:
+                            result = {"response": body_text or f"{len(raw_body)} bytes"}
+
+                        if isinstance(result, dict) and "status" not in result:
+                            result["status"] = "OK"
+
+                        await maybe_report(progress_callback, file_size, file_size)
+                        logger.info(f"✓ Upload successful: {filename} -> {remote_path}")
+                        return result
+                    else:
+                        content_type = response.headers.get('Content-Type', '')
+                        text_body = await response.text()
+                        error_msg = f"Upload failed: {response.status} ({content_type}) - {text_body}"
+                        logger.error(f"✗ {error_msg}")
+                        return {"error": error_msg}
+
         except Exception as e:
             error_msg = f"Upload exception: {str(e)}"
             logger.error(f"✗ {error_msg}")
             return {"error": error_msg}
+
 
 
 # Global client instance for reuse across requests
