@@ -1,0 +1,29 @@
+[project]
+name = "nucleus-proxy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aiohttp>=3.12.15",
+    "aiosqlite>=0.21.0",
+    "psutil>=7.0.0",
+    "pydantic>=2.11.9",
+    "pydantic-settings>=2.10.1",
+    "pyjwt>=2.10.1",
+    "python-dotenv>=1.1.1",
+    "requests>=2.32.5",
+    "rich>=14.1.0",
+    "sanic>=25.3.0",
+    "sanic-ext>=24.12.0",
+    "websockets>=15.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "sanic-testing>=24.6.0",
+]

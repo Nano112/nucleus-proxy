@@ -3,3 +3,7 @@
 test_files
 .env
 __pycache__
+data/*
+server.log
+WARP.md
+.env.testing
