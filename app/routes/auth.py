@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 from app.config import settings
-from app.nucleus.client import get_nucleus_client
+from app.nucleus.client import get_nucleus_client, reset_nucleus_client
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class LoginResponse(BaseModel):
     expires_in: int = Field(..., description="Token expiration time in seconds", json_schema_extra={"example": 900})
 
 
-def create_jwt_token(username: str, expires_in_minutes: int = 15) -> str:
+def create_jwt_token(username: str, expires_in_minutes: int = 15 * 24 * 60) -> str:
     """Create a JWT token for proxy authentication."""
     now = datetime.now(timezone.utc)
     payload = {
@@ -89,22 +89,33 @@ async def login(request: Request) -> HTTPResponse:
         # Authenticate with Nucleus
         client = await get_nucleus_client()
         auth_result = await client.authenticate(login_req.username, login_req.password)
-        
+
+        if auth_result.get('status') != 'OK':
+            logger.warning(
+                "Primary authentication attempt failed for %s: %s",
+                login_req.username,
+                auth_result,
+            )
+            await reset_nucleus_client()
+            client = await get_nucleus_client()
+            auth_result = await client.authenticate(login_req.username, login_req.password)
+
         if auth_result.get('status') != 'OK':
             return sanic_json({
                 "error": "Authentication failed",
                 "message": "Invalid credentials"
             }, status=401)
-        
-        # Create proxy JWT token
+
+        # Create proxy JWT token (15 days default)
         access_token = create_jwt_token(login_req.username)
         
         logger.info(f"User {login_req.username} authenticated successfully")
-        
+        # 15 days in seconds
+        expiry = 15 * 24 * 60 * 60
         return sanic_json({
             "access_token": access_token,
             "token_type": "Bearer",
-            "expires_in": 900  # 15 minutes
+            "expires_in": expiry
         })
         
     except Exception as e:

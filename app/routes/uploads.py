@@ -3,6 +3,7 @@ Resumable upload REST endpoints.
 Provides chunked upload functionality with session management.
 """
 
+import asyncio
 import logging
 from sanic import Blueprint, Request, HTTPResponse
 from sanic.response import json as sanic_json
@@ -228,29 +229,35 @@ async def commit_upload(request: Request) -> HTTPResponse:
         except Exception as e:
             return sanic_json({"error": f"Invalid request data: {e}"}, status=400)
         
-        # Commit the upload
+        # Kick off the commit in the background so the HTTP request
+        # doesn't get closed by response timeouts during long uploads.
         upload_manager = await get_upload_manager()
-        result = await upload_manager.commit_upload(
-            upload_token=commit_req.upload_token,
-            verify_sha256=commit_req.verify_sha256
+
+        async def run_commit() -> None:
+            try:
+                result = await upload_manager.commit_upload(
+                    upload_token=commit_req.upload_token,
+                    verify_sha256=commit_req.verify_sha256,
+                )
+                if result.get("error"):
+                    logger.error(
+                        "Commit failed for token %s: %s",
+                        commit_req.upload_token,
+                        result.get("error"),
+                    )
+            except Exception as exc:  # pragma: no cover - safety net
+                logger.exception("Commit task crashed for token %s", commit_req.upload_token)
+
+        asyncio.create_task(run_commit())
+
+        return sanic_json(
+            {
+                "message": "Upload commit started",
+                "status": "in_progress",
+                "upload_token": commit_req.upload_token,
+            },
+            status=202,
         )
-        
-        if "error" in result and result["error"]:
-            error_msg = result["error"] or ""
-            if "not found" in error_msg:
-                status_code = 404
-            elif "already completed" in error_msg:
-                status_code = 409  # Conflict
-            elif "Missing parts" in error_msg or "Cannot commit" in error_msg:
-                status_code = 400
-            else:
-                status_code = 500
-            return sanic_json(result, status=status_code)
-        
-        return sanic_json({
-            "message": "Upload committed successfully",
-            **result
-        })
         
     except Exception as e:
         logger.error(f"Error committing upload: {e}")

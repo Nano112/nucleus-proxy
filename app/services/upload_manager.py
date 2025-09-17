@@ -45,6 +45,7 @@ class UploadManager:
         self.staging_dir = Path(settings.staging_dir)
         self.max_upload_size = settings.max_upload_size
         self.default_part_size = settings.part_size_default
+        self.commit_max_attempts = settings.upload_commit_max_attempts
         
         # Ensure staging directory exists
         self.staging_dir.mkdir(parents=True, exist_ok=True)
@@ -399,15 +400,43 @@ class UploadManager:
                     sync_meta['updated_at'] = datetime.now(timezone.utc).isoformat()
                     await db.update_session(session.id, meta=session.meta)
 
-                upload_result = await nucleus_client.upload_file_single_shot(
-                    str(assembled_file_path),
-                    session.path_dir,
-                    target_filename=session.filename,
-                    progress_callback=on_sync_progress
-                )
+                upload_result = None
+                last_error = None
 
-                if upload_result.get('status') == 'OK' or upload_result.get('response'):
+                for attempt in range(1, self.commit_max_attempts + 1):
+                    sync_meta['status'] = 'uploading'
+                    sync_meta['uploaded_bytes'] = 0
+                    sync_meta['error'] = None
+                    sync_meta['attempt'] = attempt
+                    sync_meta['updated_at'] = datetime.now(timezone.utc).isoformat()
+                    await db.update_session(session.id, meta=session.meta)
+
+                    last_progress_update = 0.0
+
+                    upload_result = await nucleus_client.upload_file_single_shot(
+                        str(assembled_file_path),
+                        session.path_dir,
+                        target_filename=session.filename,
+                        progress_callback=on_sync_progress
+                    )
+
+                    if upload_result.get('status') == 'OK' or upload_result.get('response'):
+                        break
+
+                    last_error = upload_result.get('error', 'Unknown Nucleus error')
+                    sync_meta['status'] = 'retrying' if attempt < self.commit_max_attempts else 'failed'
+                    sync_meta['error'] = last_error
+                    sync_meta['uploaded_bytes'] = upload_result.get('uploaded_bytes', sync_meta.get('uploaded_bytes', 0))
+                    sync_meta['updated_at'] = datetime.now(timezone.utc).isoformat()
+                    await db.update_session(session.id, meta=session.meta)
+
+                    if attempt < self.commit_max_attempts:
+                        await asyncio.sleep(2 * attempt)
+
+                if upload_result and (upload_result.get('status') == 'OK' or upload_result.get('response')):
                     # Success - mark as completed
+                    sync_meta.pop('attempt', None)
+                    sync_meta.pop('error', None)
                     sync_meta['status'] = 'completed'
                     sync_meta['uploaded_bytes'] = session.size
                     sync_meta['total_bytes'] = session.size
@@ -438,7 +467,7 @@ class UploadManager:
                     }
                 else:
                     # Failed - update state and return error
-                    error_msg = upload_result.get('error', 'Unknown Nucleus error')
+                    error_msg = last_error or upload_result.get('error', 'Unknown Nucleus error') if upload_result else 'Unknown Nucleus error'
                     sync_meta['status'] = 'failed'
                     sync_meta['uploaded_bytes'] = sync_meta.get('uploaded_bytes', 0)
                     sync_meta['total_bytes'] = session.size

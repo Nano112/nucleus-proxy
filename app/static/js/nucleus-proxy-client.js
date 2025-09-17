@@ -219,104 +219,99 @@ class NucleusProxyClient {
       uploadedBytes = totalBytes;
       emitProgress('assembling');
 
-      const commitPromiseBase = this._request('/v1/uploads/commit', {
+      const commitInit = await this._request('/v1/uploads/commit', {
         method: 'POST',
         json: { upload_token: uploadToken },
       });
 
-      let commitSettled = false;
-      const commitPromise = commitPromiseBase
-        .then((result) => {
-          commitSettled = true;
-          return result;
-        })
-        .catch((error) => {
-          commitSettled = true;
-          throw error;
-        });
-
-      emitProgress('syncing', { syncState: 'committing', syncMeta: lastSyncMeta });
-
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const maxStatusChecks = 600;
-      let checks = 0;
-
-      const pollStatus = async () => {
-        try {
-          const statusResult = await this._request('/v1/uploads/status', {
-            method: 'POST',
-            json: { upload_token: uploadToken },
-          });
-          if (!statusResult.error) {
-            const statusData = statusResult.data || {};
-            lastSyncMeta = statusData.sync || (statusData.meta && statusData.meta.sync) || lastSyncMeta;
-            emitProgress('syncing', {
-              syncState: statusData.state,
-              syncMeta: lastSyncMeta,
-              status: statusData,
-            });
-            if (statusData.state === 'completed' || statusData.state === 'failed') {
-              return true;
-            }
-          } else {
-            emitProgress('syncing', {
-              syncState: 'committing',
-              syncMeta: lastSyncMeta,
-              status: { error: statusResult.error, status: statusResult.status },
-            });
-            if (statusResult.status === 404) {
-              return true;
-            }
-          }
-        } catch (statusError) {
-          emitProgress('syncing', {
-            syncState: 'committing',
-            syncMeta: lastSyncMeta,
-            status: { error: statusError?.message || 'status update failed' },
-          });
-        }
-        return false;
-      };
-
-      while (!commitSettled && checks < maxStatusChecks) {
-        await sleep(checks === 0 ? 300 : 750);
-        const finished = await pollStatus();
-        checks += 1;
-        if (finished) {
-          break;
-        }
-      }
-
-      const commitResult = await commitPromise;
-
-      if (commitResult.error) {
+      if (commitInit.error) {
         emitProgress('syncing', {
           syncState: 'failed',
           syncMeta: lastSyncMeta,
-          status: commitResult.error,
+          status: commitInit.error,
         });
-        throw new Error(errorMessageFrom(commitResult.error, 'Failed to commit upload'));
+        throw new Error(errorMessageFrom(commitInit.error, 'Failed to commit upload'));
       }
 
-      lastSyncMeta = lastSyncMeta || {};
+      lastSyncMeta = commitInit.data?.sync || lastSyncMeta;
+      emitProgress('syncing', { syncState: 'committing', syncMeta: lastSyncMeta, status: commitInit.data || {} });
+
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const maxStatusChecks = 1800; // ~22 minutes at 750ms intervals
+      const pollInterval = 750;
+      let finalStatus = null;
+
+      for (let checks = 0; checks < maxStatusChecks; checks += 1) {
+        if (checks === 0) {
+          await sleep(300);
+        } else {
+          await sleep(pollInterval);
+        }
+
+        const statusResult = await this._request('/v1/uploads/status', {
+          method: 'POST',
+          json: { upload_token: uploadToken },
+        });
+
+        if (statusResult.error) {
+          emitProgress('syncing', {
+            syncState: 'committing',
+            syncMeta: lastSyncMeta,
+            status: { error: statusResult.error, status: statusResult.status },
+          });
+          if (statusResult.status === 404) {
+            break;
+          }
+          continue;
+        }
+
+        const statusData = statusResult.data || {};
+        lastSyncMeta = statusData.sync || (statusData.meta && statusData.meta.sync) || lastSyncMeta;
+
+        emitProgress('syncing', {
+          syncState: statusData.state,
+          syncMeta: lastSyncMeta,
+          status: statusData,
+        });
+
+        if (statusData.state === 'completed') {
+          finalStatus = statusData;
+          break;
+        }
+
+        if (statusData.state === 'failed') {
+          finalStatus = statusData;
+          emitProgress('syncing', {
+            syncState: 'failed',
+            syncMeta: lastSyncMeta,
+            status: statusData,
+          });
+          throw new Error(statusData.error || 'Upload commit failed');
+        }
+      }
+
+      if (!finalStatus) {
+        throw new Error('Timed out waiting for upload commit to finish.');
+      }
+
       lastSyncMeta = {
         ...lastSyncMeta,
         status: 'completed',
-        uploaded_bytes: totalBytes,
-        total_bytes: lastSyncMeta.total_bytes || totalBytes,
+        uploaded_bytes: lastSyncMeta?.uploaded_bytes ?? totalBytes,
+        total_bytes: lastSyncMeta?.total_bytes ?? totalBytes,
       };
 
       emitProgress('syncing', {
         syncState: 'completed',
         syncMeta: lastSyncMeta,
-        status: commitResult.data || {},
+        status: finalStatus,
       });
 
       emitProgress('complete', { syncMeta: lastSyncMeta });
 
       return {
-        data: { ...commitResult.data, upload_token: uploadToken },
-        status: commitResult.status,
+        data: { ...finalStatus, upload_token: uploadToken },
+        status: 200,
       };
     } catch (err) {
       try {

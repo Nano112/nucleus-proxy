@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # Upload Configuration
     max_upload_size: int = 5368709120  # 5 GB
     part_size_default: int = 8388608   # 8 MB
+    upload_commit_max_attempts: int = Field(default=3, ge=1, le=10, description="Retries when uploading assembled file to Nucleus")
     
     # CORS Configuration
     cors_allow_origins: str = "*"

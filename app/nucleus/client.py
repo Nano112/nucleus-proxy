@@ -25,6 +25,7 @@ class NucleusClient:
         self.connection_token: Optional[str] = None
         self.connection_id: Optional[str] = None
         self.api_websocket: Optional[WebSocketClientProtocol] = None
+        self._api_lock = asyncio.Lock()
         self.request_id = 1
         
         # Port mapping from proof of concept
@@ -122,63 +123,84 @@ class NucleusClient:
         if not self.api_websocket:
             raise ValueError("No authorized API connection available")
         
-        try:
-            message = json.dumps(payload)
-            logger.debug(f"Sending JSON via persistent API: {message}")
-            await self.api_websocket.send(message)
-            
+        async with self._api_lock:
+            try:
+                message = json.dumps(payload)
+                logger.debug(f"Sending JSON via persistent API: {message}")
+                await self.api_websocket.send(message)
 
-            if streaming:
-                all_entries: List[Dict[str, Any]] = []
-                status: Optional[str] = None
-                try:
-                    if not self.api_websocket:
-                        if not await self.authorize_api_connection():
-                            return {"error": "Failed to authorize API connection"}
+                expected_id = payload.get("id")
 
-                    while True:
-                        response_data = await asyncio.wait_for(self.api_websocket.recv(), timeout=15)
-                        response = self.decode_response(response_data)
+                if streaming:
+                    all_entries: List[Dict[str, Any]] = []
+                    status: Optional[str] = None
+                    try:
+                        if not self.api_websocket:
+                            if not await self.authorize_api_connection():
+                                return {"error": "Failed to authorize API connection"}
 
-                        status = response.get("status")
+                        while True:
+                            response_data = await asyncio.wait_for(self.api_websocket.recv(), timeout=15)
+                            response = self.decode_response(response_data)
 
-                        # Handle error statuses immediately
-                        if status and status not in {"OK", "DONE", "LATEST"}:
-                            return response
+                            if expected_id is not None and response.get("id") not in (None, expected_id):
+                                logger.debug(
+                                    "Skipping response for request %s while waiting for %s",  # noqa: G004
+                                    response.get("id"),
+                                    expected_id,
+                                )
+                                continue
 
-                        # Accumulate entries if present
-                        if response.get("entries"):
-                            all_entries.extend(response["entries"])
+                            status = response.get("status")
 
-                        # Treat OK/DONE/LATEST as completion states
-                        if status in {"OK", "DONE", "LATEST"}:
-                            if all_entries and not response.get("entries"):
-                                response = {**response, "entries": all_entries}
-                            elif all_entries and response.get("entries") is not all_entries:
-                                response = {**response, "entries": all_entries}
-                            return response
+                            # Handle error statuses immediately
+                            if status and status not in {"OK", "DONE", "LATEST"}:
+                                return response
 
-                except asyncio.TimeoutError:
-                    logger.warning("Timeout waiting for streaming response")
+                            # Accumulate entries if present
+                            if response.get("entries"):
+                                all_entries.extend(response["entries"])
+
+                            if status in {"DONE", "LATEST"}:
+                                result = response.copy()
+                                if all_entries and not response.get("entries"):
+                                    result["entries"] = all_entries
+                                elif all_entries and response.get("entries") is not all_entries:
+                                    result["entries"] = all_entries
+                                return result
+
+                            # Continue reading on interim OK responses
+                            continue
+
+                    except asyncio.TimeoutError:
+                        logger.warning("Timeout waiting for streaming response")
+                        if all_entries:
+                            return {"status": status or "OK", "entries": all_entries}
+                        return {"status": status or "TIMEOUT"}
+                    except Exception as e:
+                        logger.error(f"Streaming API method failed: {e}")
+                        return {"error": str(e)}
+
                     if all_entries:
                         return {"status": status or "OK", "entries": all_entries}
-                    return {"status": status or "TIMEOUT"}
-                except Exception as e:
-                    logger.error(f"Streaming API method failed: {e}")
-                    return {"error": str(e)}
+                    return {"status": status or "UNKNOWN"}
 
-                if all_entries:
-                    return {"status": status or "OK", "entries": all_entries}
-                return {"status": status or "UNKNOWN"}
-
-            else:
                 # Single response
-                response_data = await asyncio.wait_for(self.api_websocket.recv(), timeout=15)
-                return self.decode_response(response_data)
-                
-        except Exception as e:
-            logger.error(f"API method call failed: {e}")
-            return {"error": str(e)}
+                while True:
+                    response_data = await asyncio.wait_for(self.api_websocket.recv(), timeout=15)
+                    response = self.decode_response(response_data)
+                    if expected_id is not None and response.get("id") not in (None, expected_id):
+                        logger.debug(
+                            "Ignoring response for request %s while awaiting %s",  # noqa: G004
+                            response.get("id"),
+                            expected_id,
+                        )
+                        continue
+                    return response
+
+            except Exception as e:
+                logger.error(f"API method call failed: {e}")
+                return {"error": str(e)}
     
     def require_auth(self):
         """Check if authentication is required."""
@@ -479,18 +501,19 @@ class NucleusClient:
         await maybe_report(progress_callback, 0, file_size)
 
         chunk_size = max(1024 * 1024, min(8 * 1024 * 1024, max(file_size // 64, 1024 * 1024)))
+        bytes_sent = 0
 
         async def file_stream():
-            sent = 0
+            nonlocal bytes_sent
             loop = asyncio.get_running_loop()
             with open(local_file_path, 'rb') as file_handle:
                 while True:
                     chunk = await loop.run_in_executor(None, file_handle.read, chunk_size)
                     if not chunk:
                         break
-                    sent += len(chunk)
+                    bytes_sent += len(chunk)
                     yield chunk
-                    await maybe_report(progress_callback, min(sent, file_size), file_size)
+                    await maybe_report(progress_callback, min(bytes_sent, file_size), file_size)
 
         writer = aiohttp.MultipartWriter()
         size_part = writer.append(str(file_size))
@@ -526,12 +549,12 @@ class NucleusClient:
                         text_body = await response.text()
                         error_msg = f"Upload failed: {response.status} ({content_type}) - {text_body}"
                         logger.error(f"✗ {error_msg}")
-                        return {"error": error_msg}
+                        return {"error": error_msg, "uploaded_bytes": bytes_sent}
 
         except Exception as e:
             error_msg = f"Upload exception: {str(e)}"
             logger.error(f"✗ {error_msg}")
-            return {"error": error_msg}
+            return {"error": error_msg, "uploaded_bytes": bytes_sent}
 
 
 
