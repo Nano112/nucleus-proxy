@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nucleus File Operations Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .operations-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .operation-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+        
+        .operation-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+        
+        .operation-card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .operation-card .icon {
+            font-size: 1.5rem;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        
+        .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+        
+        .form-group input:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-group input[type="number"] {
+            width: 150px;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.3s ease, transform 0.2s ease;
+            margin-right: 10px;
+        }
+        
+        button:hover {
+            opacity: 0.9;
+            transform: scale(1.05);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .batch-item {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+        
+        .batch-item input {
+            flex: 1;
+        }
+        
+        .batch-item button {
+            background: #ff4757;
+            padding: 8px 12px;
+            font-size: 0.9rem;
+        }
+        
+        .result-box {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .result-box h2 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .result-content {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .success {
+            color: #27ae60;
+        }
+        
+        .error {
+            color: #e74c3c;
+        }
+        
+        .info {
+            color: #3498db;
+        }
+        
+        .warning {
+            color: #f39c12;
+        }
+        
+        .auth-section {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .auth-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #e74c3c;
+        }
+        
+        .status-indicator.connected {
+            background: #27ae60;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.6; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Nucleus File Operations Demo</h1>
+        
+        <!-- Authentication Section -->
+        <div class="auth-section">
+            <div class="auth-status">
+                <div class="status-indicator" id="statusIndicator"></div>
+                <span id="statusText">Not connected</span>
+            </div>
+            <div class="form-group">
+                <label>API Token (Bearer Token)</label>
+                <input type="password" id="apiToken" placeholder="Enter your API token">
+            </div>
+            <button onclick="setAuth()">Connect</button>
+        </div>
+        
+        <!-- Operation Cards -->
+        <div class="operations-grid">
+            <!-- Rename/Move Card -->
+            <div class="operation-card">
+                <h2>
+                    <span class="icon">🔄</span>
+                    Rename / Move File
+                </h2>
+                <div class="form-group">
+                    <label>Source Path</label>
+                    <input type="text" id="renameSrc" placeholder="/Users/test/file.txt">
+                </div>
+                <div class="form-group">
+                    <label>Destination Path</label>
+                    <input type="text" id="renameDst" placeholder="/Users/test/renamed.txt">
+                </div>
+                <div class="form-group">
+                    <label>Commit Message (optional)</label>
+                    <input type="text" id="renameMsg" placeholder="Renamed for clarity">
+                </div>
+                <button onclick="renameFile()">Rename/Move</button>
+            </div>
+            
+            <!-- Copy Card -->
+            <div class="operation-card">
+                <h2>
+                    <span class="icon">📋</span>
+                    Copy File
+                </h2>
+                <div class="form-group">
+                    <label>Source Path</label>
+                    <input type="text" id="copySrc" placeholder="/Users/test/original.txt">
+                </div>
+                <div class="form-group">
+                    <label>Destination Path</label>
+                    <input type="text" id="copyDst" placeholder="/Users/test/copy.txt">
+                </div>
+                <div class="form-group">
+                    <label>Checkpoint Version (optional)</label>
+                    <input type="number" id="copyCheckpoint" placeholder="Leave empty for latest">
+                </div>
+                <div class="form-group">
+                    <label>Commit Message (optional)</label>
+                    <input type="text" id="copyMsg" placeholder="Created backup copy">
+                </div>
+                <button onclick="copyFile()">Copy File</button>
+            </div>
+            
+            <!-- Batch Rename Card -->
+            <div class="operation-card">
+                <h2>
+                    <span class="icon">📦</span>
+                    Batch Rename
+                </h2>
+                <div id="batchRenameItems">
+                    <div class="batch-item">
+                        <input type="text" placeholder="Source path" class="batch-rename-src">
+                        <input type="text" placeholder="Destination path" class="batch-rename-dst">
+                    </div>
+                </div>
+                <button onclick="addBatchRenameItem()">+ Add Item</button>
+                <button onclick="batchRename()">Execute Batch</button>
+            </div>
+            
+            <!-- Batch Copy Card -->
+            <div class="operation-card">
+                <h2>
+                    <span class="icon">📑</span>
+                    Batch Copy
+                </h2>
+                <div id="batchCopyItems">
+                    <div class="batch-item">
+                        <input type="text" placeholder="Source path" class="batch-copy-src">
+                        <input type="text" placeholder="Destination path" class="batch-copy-dst">
+                    </div>
+                </div>
+                <button onclick="addBatchCopyItem()">+ Add Item</button>
+                <button onclick="batchCopy()">Execute Batch</button>
+            </div>
+        </div>
+        
+        <!-- Results Section -->
+        <div class="result-box">
+            <h2>📊 Operation Results</h2>
+            <div class="result-content" id="results">
+                <span class="info">Results will appear here...</span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8088/v1/files';
+        let authToken = '';
+        
+        function setAuth() {
+            authToken = document.getElementById('apiToken').value;
+            if (authToken) {
+                document.getElementById('statusIndicator').classList.add('connected');
+                document.getElementById('statusText').textContent = 'Connected';
+                addResult('✅ Authentication token set', 'success');
+            }
+        }
+        
+        function addResult(message, type = 'info') {
+            const results = document.getElementById('results');
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = `[${timestamp}] <span class="${type}">${message}</span>\n`;
+            
+            // Append new result
+            if (results.innerHTML.includes('Results will appear here')) {
+                results.innerHTML = entry;
+            } else {
+                results.innerHTML += entry;
+            }
+            
+            // Scroll to bottom
+            results.scrollTop = results.scrollHeight;
+        }
+        
+        async function makeRequest(endpoint, method, body) {
+            if (!authToken) {
+                addResult('❌ Please set authentication token first', 'error');
+                return null;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify(body)
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                
+                return data;
+            } catch (error) {
+                addResult(`❌ Error: ${error.message}`, 'error');
+                return null;
+            }
+        }
+        
+        async function renameFile() {
+            const src = document.getElementById('renameSrc').value;
+            const dst = document.getElementById('renameDst').value;
+            const message = document.getElementById('renameMsg').value || undefined;
+            
+            if (!src || !dst) {
+                addResult('⚠️ Please provide both source and destination paths', 'warning');
+                return;
+            }
+            
+            addResult(`📝 Renaming ${src} to ${dst}...`, 'info');
+            
+            const result = await makeRequest('/rename', 'POST', {
+                src, dst, message
+            });
+            
+            if (result) {
+                addResult(`✅ ${result.message || 'File renamed successfully'}`, 'success');
+            }
+        }
+        
+        async function copyFile() {
+            const src = document.getElementById('copySrc').value;
+            const dst = document.getElementById('copyDst').value;
+            const checkpoint = parseInt(document.getElementById('copyCheckpoint').value) || undefined;
+            const message = document.getElementById('copyMsg').value || undefined;
+            
+            if (!src || !dst) {
+                addResult('⚠️ Please provide both source and destination paths', 'warning');
+                return;
+            }
+            
+            addResult(`📋 Copying ${src} to ${dst}...`, 'info');
+            
+            const result = await makeRequest('/copy', 'POST', {
+                src, dst, checkpoint, message
+            });
+            
+            if (result) {
+                let msg = `✅ ${result.message || 'File copied successfully'}`;
+                if (result.transaction_id) {
+                    msg += ` (Transaction ID: ${result.transaction_id})`;
+                }
+                addResult(msg, 'success');
+            }
+        }
+        
+        function addBatchRenameItem() {
+            const container = document.getElementById('batchRenameItems');
+            const item = document.createElement('div');
+            item.className = 'batch-item';
+            item.innerHTML = `
+                <input type="text" placeholder="Source path" class="batch-rename-src">
+                <input type="text" placeholder="Destination path" class="batch-rename-dst">
+                <button onclick="this.parentElement.remove()">Remove</button>
+            `;
+            container.appendChild(item);
+        }
+        
+        function addBatchCopyItem() {
+            const container = document.getElementById('batchCopyItems');
+            const item = document.createElement('div');
+            item.className = 'batch-item';
+            item.innerHTML = `
+                <input type="text" placeholder="Source path" class="batch-copy-src">
+                <input type="text" placeholder="Destination path" class="batch-copy-dst">
+                <button onclick="this.parentElement.remove()">Remove</button>
+            `;
+            container.appendChild(item);
+        }
+        
+        async function batchRename() {
+            const items = document.querySelectorAll('#batchRenameItems .batch-item');
+            const paths_to_rename = [];
+            
+            items.forEach(item => {
+                const src = item.querySelector('.batch-rename-src').value;
+                const dst = item.querySelector('.batch-rename-dst').value;
+                if (src && dst) {
+                    paths_to_rename.push({
+                        src: { path: src },
+                        dst: { path: dst }
+                    });
+                }
+            });
+            
+            if (paths_to_rename.length === 0) {
+                addResult('⚠️ No valid rename operations specified', 'warning');
+                return;
+            }
+            
+            addResult(`📦 Batch renaming ${paths_to_rename.length} files...`, 'info');
+            
+            const result = await makeRequest('/rename/batch', 'POST', { paths_to_rename });
+            
+            if (result) {
+                addResult(`✅ Batch rename complete: ${result.succeeded} succeeded, ${result.failed} failed`, 
+                    result.failed > 0 ? 'warning' : 'success');
+                
+                if (result.results) {
+                    result.results.forEach(r => {
+                        if (r.success) {
+                            addResult(`  ✓ ${r.src} → ${r.dst}`, 'success');
+                        } else {
+                            addResult(`  ✗ ${r.src}: ${r.error}`, 'error');
+                        }
+                    });
+                }
+            }
+        }
+        
+        async function batchCopy() {
+            const items = document.querySelectorAll('#batchCopyItems .batch-item');
+            const paths_to_copy = [];
+            
+            items.forEach(item => {
+                const src = item.querySelector('.batch-copy-src').value;
+                const dst = item.querySelector('.batch-copy-dst').value;
+                if (src && dst) {
+                    paths_to_copy.push({
+                        src: { path: src },
+                        dst: { path: dst }
+                    });
+                }
+            });
+            
+            if (paths_to_copy.length === 0) {
+                addResult('⚠️ No valid copy operations specified', 'warning');
+                return;
+            }
+            
+            addResult(`📑 Batch copying ${paths_to_copy.length} files...`, 'info');
+            
+            const result = await makeRequest('/copy/batch', 'POST', { paths_to_copy });
+            
+            if (result) {
+                addResult(`✅ Batch copy complete: ${result.succeeded} succeeded, ${result.failed} failed`,
+                    result.failed > 0 ? 'warning' : 'success');
+                
+                if (result.results) {
+                    result.results.forEach(r => {
+                        if (r.success) {
+                            addResult(`  ✓ ${r.src} → ${r.dst}`, 'success');
+                        } else {
+                            addResult(`  ✗ ${r.src}: ${r.error}`, 'error');
+                        }
+                    });
+                }
+            }
+        }
+    </script>
+</body>
+</html>
