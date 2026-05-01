@@ -5,6 +5,7 @@ Provides endpoints for user authentication, token generation,
 and session management for the Nucleus Proxy.
 """
 
+import functools
 import jwt
 import logging
 import re
@@ -318,6 +319,7 @@ async def logout(request: Request) -> HTTPResponse:
 # Middleware for JWT authentication on protected routes
 def require_auth(f):
     """Decorator to require JWT authentication."""
+    @functools.wraps(f)
     async def wrapper(request: Request, *args, **kwargs):
         auth_header = request.headers.get('Authorization')
         if not auth_header:

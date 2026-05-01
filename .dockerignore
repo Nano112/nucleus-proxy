@@ -1,0 +1,13 @@
+__pycache__
+*.pyc
+.git
+.env
+.env.*
+.venv
+tests/
+test_files/
+htmlcov/
+data/
+server.log
+.DS_Store
+

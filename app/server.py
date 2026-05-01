@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from sanic import Sanic, Request, HTTPResponse
 from sanic.response import json as sanic_json
+
 # from sanic_ext import Extend  # Auto-loaded by Sanic
 from app.config import settings
 from app.routes.auth import auth_bp
@@ -19,6 +20,7 @@ from app.routes.monitoring import monitoring_bp
 from app.routes.tenants import tenants_bp
 from app.routes.realtime import realtime_bp
 from app.routes.ui import ui_bp, ui_api_bp
+from app.routes.export import export_bp
 from app.routes.admin import bp as admin_bp
 from app.middleware.monitoring import setup_monitoring_middleware
 from app.middleware.security import security_middleware
@@ -27,9 +29,14 @@ from app.middleware.cors import setup_cors
 
 def create_app() -> Sanic:
     """Create and configure the Sanic application."""
-    
+
     # Create app instance that will be registered in the app registry
     app = Sanic("nucleus-proxy")
+
+    # Trust X-Forwarded-* headers from Traefik
+    app.config.PROXIES_COUNT = 1
+    app.config.PROXIES_TRUSTED_HOSTS = ["*"]
+    app.config.FORWARDED_SECRET = None  # Optional: set if Traefik sends a secret
 
     timeout_seconds = max(1, int(settings.request_timeouts))
     app.config.REQUEST_TIMEOUT = timeout_seconds
@@ -38,7 +45,7 @@ def create_app() -> Sanic:
 
     static_dir = Path(__file__).resolve().parent / "static"
     app.static("/static", str(static_dir))
-    
+
     # Configure Sanic-Ext for OpenAPI
     # OpenAPI/Swagger metadata
     app.ext.openapi.title = "Nucleus Proxy API"
@@ -48,14 +55,14 @@ def create_app() -> Sanic:
         "file management, uploads, signed URLs, monitoring, multi‑tenant "
         "controls, and realtime event streaming."
     )
-    
+
     # Configure CORS
     app.config.CORS_ORIGINS = settings.cors_allow_origins
-    
+
     # Configure logging
     logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
-    logging.getLogger('aiosqlite').setLevel(logging.WARNING)
-    
+    logging.getLogger("aiosqlite").setLevel(logging.WARNING)
+
     # Register blueprints
     app.blueprint(auth_bp)
     app.blueprint(files_bp)
@@ -66,11 +73,12 @@ def create_app() -> Sanic:
     app.blueprint(realtime_bp)
     app.blueprint(ui_bp)
     app.blueprint(ui_api_bp)
+    app.blueprint(export_bp)
     app.blueprint(admin_bp)
-    
+
     # Setup monitoring middleware
     setup_monitoring_middleware(app)
-    
+
     # Setup security hardening middleware
     security_middleware(app)
 
@@ -91,31 +99,31 @@ def create_app() -> Sanic:
         from app.services.events import initialize_events
         from app.services.sync_recovery import initialize_sync_recovery
         from app.services.upload_cleanup import start_cleanup_service
-        
+
         # Initialize core database
         await initialize_database()
-        
+
         # Initialize indexing and search services
         await initialize_file_indexer()
         await initialize_search_engine()
-        
+
         # Initialize monitoring and metrics
         await initialize_metrics()
         await initialize_background_tasks()
-        
+
         # Initialize security and multi-tenancy
         await initialize_tenancy()
         await initialize_security()
-        
+
         # Initialize real-time event system
         await initialize_events()
-        
+
         # Initialize sync recovery (must be after database)
         await initialize_sync_recovery()
-        
+
         # Start upload cleanup service
         await start_cleanup_service()
-    
+
     @app.before_server_stop
     async def cleanup_services(app_instance, loop):
         """Clean up services on server shutdown"""
@@ -126,7 +134,7 @@ def create_app() -> Sanic:
         from app.services.events import shutdown_events
         from app.services.sync_recovery import shutdown_sync_recovery
         from app.services.upload_cleanup import stop_cleanup_service
-        
+
         await shutdown_sync_recovery()
         await shutdown_events()
         await shutdown_security()
@@ -134,7 +142,7 @@ def create_app() -> Sanic:
         await shutdown_background_tasks()
         await stop_cleanup_service()
         await shutdown_metrics()
-    
+
     # Health endpoint
     @app.get("/health")
     async def health(request: Request) -> HTTPResponse:
@@ -148,17 +156,18 @@ def create_app() -> Sanic:
         - 200: JSON with `status`, `service`, `version`, `timestamp`.
         """
         from datetime import datetime, timezone
-        return sanic_json({
-            "status": "OK",
-            "service": "nucleus-proxy",
-            "version": "0.1.0",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
-    
 
-    
+        return sanic_json(
+            {
+                "status": "OK",
+                "service": "nucleus-proxy",
+                "version": "0.1.0",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
     # Error handlers are handled by monitoring middleware
-    
+
     return app
 
 

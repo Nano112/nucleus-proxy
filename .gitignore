@@ -7,3 +7,12 @@ data/*
 server.log
 WARP.md
 .env.testing
+
+# Project-specific deployment artifacts (live in deploying repo, not here)
+k8s/
+deploy_k8s.sh
+
+# Build artifacts
+*.tar
+*.tgz
+nucleus-proxy.tar
