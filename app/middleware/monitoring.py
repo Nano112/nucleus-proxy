@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 from sanic import Request, HTTPResponse
+from sanic.exceptions import SanicException
 from sanic.response import JSONResponse
 
 from app.services.metrics import (
@@ -186,7 +187,31 @@ def setup_monitoring_middleware(app):
             # Finish tracking for the exception case
             duration = time.time() - tracker.start_time
             record_request_duration(method, endpoint, duration)
-        
+
+        # Sanic raises SanicException subclasses to signal ordinary client-side
+        # outcomes -- NotFound (404), Unauthorized (401), MethodNotAllowed (405),
+        # PayloadTooLarge (413). This is a catch-all Exception handler, so without
+        # this branch every one of them was reported as a 500: /openapi.json
+        # answered "Internal server error" instead of 404, and a part rejected by
+        # REQUEST_MAX_SIZE looked like a proxy fault rather than a bad request.
+        # Preserve the real status and skip the traceback for these.
+        status_code = getattr(exception, "status_code", None)
+        if isinstance(exception, SanicException) and isinstance(status_code, int) and status_code < 500:
+            logger.info(
+                f"Request {request_id}: {status_code} on {method} {endpoint}: {exception}"
+            )
+            collector = get_metrics_collector()
+            collector.increment_counter("client_errors_total", {
+                "endpoint": endpoint,
+                "method": method,
+                "status_code": str(status_code),
+            })
+            return JSONResponse({
+                "error": type(exception).__name__,
+                "request_id": request_id,
+                "message": str(exception),
+            }, status=status_code)
+
         # Log the exception
         logger.error(
             f"Request {request_id}: Unhandled exception in {method} {endpoint}: {str(exception)}",

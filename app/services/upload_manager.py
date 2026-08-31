@@ -74,7 +74,16 @@ class UploadManager:
             
             if file_size > self.max_upload_size:
                 return {"error": f"File size exceeds maximum allowed: {self.max_upload_size} bytes"}
-            
+
+            # Staging holds the parts AND the assembled copy, so a commit needs
+            # roughly 2x the file size on disk. The staging volume is backed by
+            # node-local storage that is shared with the rest of the node, so
+            # running it dry is not contained to this pod -- refuse up front
+            # instead of filling the disk and failing halfway through a commit.
+            space_error = self._check_staging_capacity(file_size)
+            if space_error:
+                return {"error": space_error}
+
             if not filename or not filename.strip():
                 return {"error": "Filename is required"}
                 
@@ -92,7 +101,22 @@ class UploadManager:
             
             # Use default part size if not specified
             actual_part_size = part_size or self.default_part_size
-            
+
+            if actual_part_size <= 0:
+                return {"error": "part_size must be greater than 0"}
+
+            # Reject oversized parts up front. Sanic caps a single request body at
+            # REQUEST_MAX_SIZE (derived from this same setting), so accepting a
+            # larger part_size here would hand the client a session whose parts
+            # can never be uploaded.
+            if actual_part_size > settings.part_size_max:
+                return {
+                    "error": (
+                        f"part_size {actual_part_size} exceeds maximum "
+                        f"{settings.part_size_max}"
+                    )
+                }
+
             # Calculate expected number of parts
             num_parts = (file_size + actual_part_size - 1) // actual_part_size
             
@@ -589,68 +613,141 @@ class UploadManager:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {"error": "Internal server error"}
     
+    # Commit writes the assembled file alongside the parts, so peak staging
+    # usage is ~2x the upload. Keep a margin on top so a large upload cannot
+    # take the node's disk to zero.
+    STAGING_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024
+
+    def _check_staging_capacity(self, file_size: int) -> Optional[str]:
+        """
+        Return an error string if staging lacks room for this upload, else None.
+        Never raises -- if usage can't be determined the upload is allowed.
+        """
+        try:
+            self.staging_dir.mkdir(parents=True, exist_ok=True)
+            free = shutil.disk_usage(self.staging_dir).free
+        except Exception as e:
+            logger.warning(f"Could not determine staging free space: {e}")
+            return None
+
+        required = (file_size * 2) + self.STAGING_HEADROOM_BYTES
+        if free < required:
+            logger.error(
+                f"Rejecting upload of {file_size} bytes: staging has {free} free, "
+                f"needs {required} (2x file + headroom)"
+            )
+            return (
+                f"Insufficient server storage for this upload: needs ~{required} "
+                f"bytes of staging, {free} available"
+            )
+        return None
+
+    # Parts are streamed through this buffer during assembly so peak memory
+    # stays flat regardless of part_size / total file size.
+    ASSEMBLY_CHUNK_SIZE = 4 * 1024 * 1024
+
+    def _assemble_parts_blocking(
+        self,
+        session: UploadSession,
+        parts: List[UploadPart],
+        assembled_file_path: Path,
+    ) -> Optional[int]:
+        """
+        Concatenate part files on disk. Blocking -- must only ever be run in a
+        worker thread (see _assemble_parts), never directly on the event loop.
+
+        Returns total bytes written, or None on failure.
+        """
+        total_written = 0
+
+        with open(assembled_file_path, 'wb') as assembled_file:
+            for part in parts:
+                part_path = Path(part.path_on_disk)
+                if not part_path.exists():
+                    logger.error(f"Part file not found: {part_path}")
+                    return None
+
+                written = 0
+                with open(part_path, 'rb') as part_file:
+                    while True:
+                        chunk = part_file.read(self.ASSEMBLY_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        assembled_file.write(chunk)
+                        written += len(chunk)
+
+                if written != part.size:
+                    logger.error(f"Part size mismatch: expected {part.size}, got {written}")
+                    return None
+
+                total_written += written
+
+        return total_written
+
     async def _assemble_parts(self, session: UploadSession, parts: List[UploadPart]) -> Optional[Path]:
         """
         Assemble individual parts into a complete file.
-        
+
         Args:
             session: Upload session
             parts: List of upload parts (should be ordered by index)
-            
+
         Returns:
             Path to assembled file or None on failure
         """
         try:
             # Sort parts by index to ensure correct order
             parts.sort(key=lambda p: p.index)
-            
+
             # Create temporary file for assembly
             session_staging_dir = self.staging_dir / session.id
             assembled_file_path = session_staging_dir / f"assembled_{session.filename}"
-            
-            total_written = 0
-            
-            with open(assembled_file_path, 'wb') as assembled_file:
-                for part in parts:
-                    part_path = Path(part.path_on_disk)
-                    if not part_path.exists():
-                        logger.error(f"Part file not found: {part_path}")
-                        return None
-                    
-                    with open(part_path, 'rb') as part_file:
-                        data = part_file.read()
-                        if len(data) != part.size:
-                            logger.error(f"Part size mismatch: expected {part.size}, got {len(data)}")
-                            return None
-                        
-                        assembled_file.write(data)
-                        total_written += len(data)
-            
+
+            # Assembling a multi-GB upload is minutes of blocking file IO. Sanic
+            # runs a single worker here, so doing it inline stalls the event loop:
+            # /health stops answering, the readiness probe fails, Kubernetes pulls
+            # the pod out of its Service and Traefik then returns 502 for every
+            # request (and the liveness probe eventually restarts the container,
+            # killing the upload). Run it in a thread so the loop keeps serving.
+            total_written = await asyncio.to_thread(
+                self._assemble_parts_blocking, session, parts, assembled_file_path
+            )
+
+            if total_written is None:
+                return None
+
             # Verify total size
             if total_written != session.size:
                 logger.error(f"Assembled file size mismatch: expected {session.size}, got {total_written}")
                 return None
-            
+
             logger.info(f"Successfully assembled {len(parts)} parts into {assembled_file_path} ({total_written} bytes)")
             return assembled_file_path
-            
+
         except Exception as e:
             logger.error(f"Error assembling parts for session {session.id}: {e}")
             return None
-    
+
+    @staticmethod
+    def _calculate_file_sha256_blocking(file_path: Path) -> str:
+        """Blocking SHA256. Worker-thread only -- see _calculate_file_sha256."""
+        hash_sha256 = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            # Read in chunks to handle large files
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
+
     async def _calculate_file_sha256(self, file_path: Path) -> str:
         """Calculate SHA256 hash of a file"""
         try:
-            hash_sha256 = hashlib.sha256()
-            with open(file_path, 'rb') as f:
-                # Read in chunks to handle large files
-                for chunk in iter(lambda: f.read(65536), b""):
-                    hash_sha256.update(chunk)
-            return hash_sha256.hexdigest()
+            # Second full pass over the assembled file -- same event-loop
+            # starvation risk as assembly, so it goes to a thread too.
+            return await asyncio.to_thread(self._calculate_file_sha256_blocking, file_path)
         except Exception as e:
             logger.error(f"Error calculating SHA256 for {file_path}: {e}")
             return ""
-    
+
     def _sanitize_filename(self, filename: str) -> str:
         """Sanitize filename to prevent path traversal and other issues"""
         if not filename:

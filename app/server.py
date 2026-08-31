@@ -43,6 +43,12 @@ def create_app() -> Sanic:
     app.config.RESPONSE_TIMEOUT = timeout_seconds
     app.config.KEEP_ALIVE_TIMEOUT = max(5, min(timeout_seconds // 2, 120))
 
+    # Uploads are chunked, so the largest body we ever accept is one part -- not
+    # max_upload_size. Sanic otherwise defaults REQUEST_MAX_SIZE to 100 MB, which
+    # silently truncated any client that raised part_size above it. Leave headroom
+    # for multipart framing on top of the part itself.
+    app.config.REQUEST_MAX_SIZE = int(settings.part_size_max) + (16 * 1024 * 1024)
+
     static_dir = Path(__file__).resolve().parent / "static"
     app.static("/static", str(static_dir))
 

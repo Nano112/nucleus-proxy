@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # Upload Configuration
     max_upload_size: int = 5368709120  # 5 GB
     part_size_default: int = 8388608  # 8 MB
+    # Hard ceiling for a single part. Clients may pass their own part_size to
+    # /v1/uploads/initiate; anything above this is rejected rather than silently
+    # failing later against Sanic's REQUEST_MAX_SIZE (see server.py).
+    part_size_max: int = 67108864  # 64 MB
     upload_commit_max_attempts: int = Field(
         default=3,
         ge=1,
