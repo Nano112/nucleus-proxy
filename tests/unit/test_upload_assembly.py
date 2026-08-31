@@ -121,3 +121,22 @@ def test_capacity_preflight_fails_open_if_unmeasurable(manager, monkeypatch):
 
     monkeypatch.setattr(_shutil, "disk_usage", boom)
     assert manager._check_staging_capacity(1024) is None
+
+
+def test_capacity_preflight_honours_configured_headroom(manager, monkeypatch):
+    """Headroom is what keeps a big upload from starving Nucleus on the same disk."""
+    import shutil as _shutil
+    from app.config import settings
+
+    GiB = 1024 ** 3
+    # 10 GiB file needs 2x = 20 GiB, and the volume has 25 GiB free.
+    monkeypatch.setattr(
+        _shutil, "disk_usage",
+        lambda _p: type("U", (), {"total": 100 * GiB, "used": 75 * GiB, "free": 25 * GiB})(),
+    )
+
+    monkeypatch.setattr(settings, "staging_headroom_bytes", 1 * GiB)
+    assert manager._check_staging_capacity(10 * GiB) is None      # 20 + 1 <= 25
+
+    monkeypatch.setattr(settings, "staging_headroom_bytes", 20 * GiB)
+    assert manager._check_staging_capacity(10 * GiB) is not None   # 20 + 20 > 25
