@@ -613,11 +613,6 @@ class UploadManager:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {"error": "Internal server error"}
     
-    # Commit writes the assembled file alongside the parts, so peak staging
-    # usage is ~2x the upload. Keep a margin on top so a large upload cannot
-    # take the node's disk to zero.
-    STAGING_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024
-
     def _check_staging_capacity(self, file_size: int) -> Optional[str]:
         """
         Return an error string if staging lacks room for this upload, else None.
@@ -630,7 +625,9 @@ class UploadManager:
             logger.warning(f"Could not determine staging free space: {e}")
             return None
 
-        required = (file_size * 2) + self.STAGING_HEADROOM_BYTES
+        # Commit writes the assembled file alongside the parts, so peak staging
+        # usage is ~2x the upload, plus a margin that must survive it.
+        required = (file_size * 2) + settings.staging_headroom_bytes
         if free < required:
             logger.error(
                 f"Rejecting upload of {file_size} bytes: staging has {free} free, "

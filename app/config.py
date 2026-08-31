@@ -42,12 +42,16 @@ class Settings(BaseSettings):
     staging_dir: str = "./data/staging"
 
     # Upload Configuration
-    max_upload_size: int = 5368709120  # 5 GB
+    max_upload_size: int = 68719476736  # 64 GiB
     part_size_default: int = 8388608  # 8 MB
     # Hard ceiling for a single part. Clients may pass their own part_size to
     # /v1/uploads/initiate; anything above this is rejected rather than silently
     # failing later against Sanic's REQUEST_MAX_SIZE (see server.py).
     part_size_max: int = 67108864  # 64 MB
+    # Free bytes that must remain on the staging volume AFTER an upload's worst
+    # case (see UploadManager._check_staging_capacity). Staging shares a disk with
+    # Nucleus' own data, so this is what stops a large upload from starving it.
+    staging_headroom_bytes: int = 21474836480  # 20 GiB
     upload_commit_max_attempts: int = Field(
         default=3,
         ge=1,
