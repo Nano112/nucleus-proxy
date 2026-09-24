@@ -4,6 +4,7 @@ Provides chunked upload functionality with session management.
 """
 
 import asyncio
+import gc
 import logging
 from sanic import Blueprint, Request, HTTPResponse
 from sanic.response import json as sanic_json
@@ -202,6 +203,16 @@ async def upload_part(request: Request) -> HTTPResponse:
             "error": "Internal server error",
             "message": "Failed to upload part"
         }, status=500)
+
+    finally:
+        # Sanic keeps the parsed multipart body on Request. Request/protocol
+        # cycles can otherwise retain two copies of every large part until a
+        # later cyclic-GC pass, exhausting a bounded worker during long uploads.
+        # All part bytes have been persisted before returning the response.
+        request.body = b""
+        request.parsed_files = None
+        request.parsed_form = None
+        gc.collect()
 
 
 @uploads_bp.post("/commit", name="commit_upload")

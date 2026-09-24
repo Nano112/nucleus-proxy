@@ -405,7 +405,7 @@ class Database:
             async with aiosqlite.connect(self.db_path) as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute("""
-                    SELECT * FROM upload_sessions WHERE token_id = ? AND state != 'completed'
+                    SELECT * FROM upload_sessions WHERE token_id = ?
                     ORDER BY created_at DESC LIMIT 1
                 """, (upload_token,)) as cursor:
                     row = await cursor.fetchone()
