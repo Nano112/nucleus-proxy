@@ -249,8 +249,12 @@ async def list_files(request: Request) -> HTTPResponse:
                 "name": entry_name,
                 "type": entry.get('path_type', 'unknown'),
                 "size": entry.get('size'),
-                "modified_at": entry.get('modified_time'),
-                "created_by": entry.get('created_by')
+                "modified_at": entry.get('modified_timestamp', entry.get('modified_time')),
+                "created_by": entry.get('created_by'),
+                "etag": entry.get('etag'),
+                "hash_type": entry.get('hash_type'),
+                "hash_value": entry.get('hash_value'),
+                "hash_bsize": entry.get('hash_bsize')
             })
         
         # Add virtual files for currently syncing uploads if enabled
