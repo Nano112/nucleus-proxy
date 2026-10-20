@@ -556,41 +556,10 @@ class NucleusClient:
             "path": {"path": path},
         }
 
-        # stat2 returns streaming responses - first the metadata, then DONE
-        try:
-            message = json.dumps(payload)
-            logger.debug(f"Sending JSON via persistent API: {message}")
-            await self.api_websocket.send(message)
-
-            # Get first response which should be the metadata
-            response_data = await asyncio.wait_for(
-                self.api_websocket.recv(), timeout=15
-            )
-            result = self.decode_response(response_data)
-            logger.debug(f"stat2 first response: {result}")
-
-            # If we got the metadata (status=OK with data), try to read the final DONE status
-            if result.get("status") == "OK" and "type" in result:
-                try:
-                    # Try to read the DONE status (optional)
-                    done_data = await asyncio.wait_for(
-                        self.api_websocket.recv(), timeout=2
-                    )
-                    done_response = self.decode_response(done_data)
-                    logger.debug(f"stat2 done response: {done_response}")
-                except asyncio.TimeoutError:
-                    # No DONE response, that's ok
-                    logger.debug("No DONE response for stat2, continuing")
-                # Return the metadata result
-                return result
-            else:
-                # Single response or error
-                logger.debug(f"stat2 single/error response: {result}")
-                return result
-
-        except Exception as e:
-            logger.error(f"API method call failed: {e}")
-            return {"error": str(e)}
+        # Use the same lock and request-id filtering as every other API call.
+        # stat2 metadata is a single usable response; any trailing DONE frame is
+        # skipped by the next request's correlation check.
+        return await self.call_api_method(payload, streaming=False)
 
     async def delete_legacy(self, path: str) -> Dict[str, Any]:
         """Delete using legacy delete command (needed for folders)."""
@@ -1009,10 +978,12 @@ class NucleusClient:
                         self.api_websocket.recv(), timeout=15
                     )
                     response = self.decode_response(response_data)
+                    if response.get("id") != payload["id"]:
+                        continue
                     if response and response.get("uri_redirection"):
                         raw_url = response["uri_redirection"]
                         download_url = self._rewrite_download_url(raw_url)
-                        logger.info("Download URL: %s -> %s", raw_url, download_url)
+                        logger.debug("Received signed download URL for request %s", payload["id"])
                         return {"status": "OK", "download_url": download_url}
                     if response.get("status") in ["DONE", "LATEST"]:
                         break

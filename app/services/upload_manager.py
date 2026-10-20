@@ -131,7 +131,7 @@ class UploadManager:
                 sha256=file_sha256,
                 part_size=actual_part_size,
                 received_bytes=0,
-                created_at=datetime.now(),
+                created_at=datetime.now(timezone.utc),
                 state=UploadState.PENDING,
                 error=None,
                 meta={
@@ -351,7 +351,8 @@ class UploadManager:
                 return {"error": "Upload session not found or expired"}
             
             if session.state == UploadState.COMPLETED:
-                return {"error": "Upload session already completed"}
+                return {"status": "completed", "filename": session.filename,
+                        "size": session.size, "target_path": f"{session.path_dir}/{session.filename}"}
             
             if session.state in [UploadState.FAILED, UploadState.EXPIRED]:
                 return {"error": f"Cannot commit upload in {session.state.value} state"}

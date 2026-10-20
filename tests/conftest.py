@@ -41,7 +41,7 @@ def pytest_pyfunc_call(pyfuncitem):
         else:
             loop.run_until_complete(testfunction(**needed))
         return True
-    return False
+    return None  # Let pytest execute synchronous tests.
 
 
 @pytest.fixture(scope="session")
