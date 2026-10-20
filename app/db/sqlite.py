@@ -19,6 +19,12 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def session_time(value: str) -> datetime:
+    """Sessions written before upload times were UTC-aware stored naive UTC."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 class UploadState(str, Enum):
     """Upload session states"""
     PENDING = "pending"      # Session created, accepting parts
@@ -389,7 +395,7 @@ class Database:
                         sha256=row[6],
                         part_size=row[7],
                         received_bytes=row[8],
-                        created_at=datetime.fromisoformat(row[9]),
+                        created_at=session_time(row[9]),
                         state=UploadState(row[10]),
                         error=row[11],
                         meta=json.loads(row[12]) if row[12] else {}
@@ -667,7 +673,7 @@ class Database:
             sha256=row['sha256'],
             part_size=row['part_size'],
             received_bytes=row['received_bytes'],
-            created_at=datetime.fromisoformat(row['created_at']),
+            created_at=session_time(row['created_at']),
             state=UploadState(row['state']),
             error=row['error'],
             meta=json.loads(row['meta'] or '{}')
