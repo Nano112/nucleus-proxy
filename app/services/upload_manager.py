@@ -131,7 +131,7 @@ class UploadManager:
                 sha256=file_sha256,
                 part_size=actual_part_size,
                 received_bytes=0,
-                created_at=datetime.now(),
+                created_at=datetime.now(timezone.utc),
                 state=UploadState.PENDING,
                 error=None,
                 meta={
